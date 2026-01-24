@@ -19,11 +19,17 @@ M-x flash-emacs-jump
 
 * Options
 
-- =flash-emacs-labels=: characters used for labels.
-- =flash-emacs-multi-window=: search across visible windows.
-- =flash-emacs-case-sensitive=: nil, t, or smart.
-- =flash-emacs-min-pattern-length=: minimum input length.
-- =flash-emacs-auto-jump-single=: auto-jump on a single match.
+- =flash-emacs-labels=: characters used for labels, default to only lower cases.
+#+begin_src elisp
+;; example config, add upper case letters as well.
+(setq flash-emacs-labels "asdghklqwertyuiopzxcvbnmfjASDGHKLQWERTYUIOPZXCVBNMFJ")
+#+end_src
+- =flash-emacs-case-sensitive=: nil, t, or smart, default to smart.
+#+begin_src elisp
+;; nil: case-insensitive search, t: case sensitive search, smart:-case-insensitive if pattern is all lowercase, case-sensitive if it contains uppercase
+(setq flash-emacs-case-sensitive 't)
+#+end_src
+- =flash-emacs-auto-jump-single=: if there is only a single match, jump to it without entering the letter.
 - =flash-emacs-exclude-modes=: major modes excluded from search.
 - =flash-emacs-max-buffer-size=: maximum buffer size for searching.
 
