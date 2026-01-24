@@ -33,6 +33,18 @@ M-x flash-emacs-jump
 - =flash-emacs-exclude-modes=: major modes excluded from search.
 - =flash-emacs-max-buffer-size=: maximum buffer size for searching.
 
+** matching color customization 
+You can also customize the color of the matching and the labels:
+#+begin_src elisp
+(with-eval-after-load 'flash-emacs
+  (set-face-attribute 'flash-emacs-match nil
+                      :background "gold"
+                      :foreground "black")
+  (set-face-attribute 'flash-emacs-label nil
+                      :background "pink"
+                      :foreground "white"))
+#+end_src
+
 * Example 
 #+attr_org: :width 400
 [[./examples/flash-example.gif]]
