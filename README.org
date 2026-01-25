@@ -45,8 +45,20 @@ You can also customize the color of the matching and the labels:
                       :foreground "white"))
 #+end_src
 
+** jump back functionality
+The current code does not provide "jump back" functionality, so customized mark is needed to be able to jump back to the original position after jumping.
+Below is an example if "better-jump" package is used:
+#+begin_src elisp
+(defun flash-emacs--set-jump-before-jump (&rest _args)
+  "Set a jump point before running `flash-emacs-jump`."
+  (better-jumper-set-jump))
+
+(advice-add 'flash-emacs-jump :before #'flash-emacs--set-jump-before-jump)
+#+end_src
+
 * Example 
 #+attr_org: :width 400
 [[./examples/flash-example.gif]]
+
 * Reference 
 + [[https://github.com/folke/flash.nvim][flash.nvim]]
