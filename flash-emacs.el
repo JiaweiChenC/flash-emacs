@@ -55,6 +55,12 @@
   :type 'boolean
   :group 'flash-emacs)
 
+;; Added: Toggle for background dimming
+(defcustom flash-emacs-dim-background t
+  "Whether to dim the background during jump navigation."
+  :type 'boolean
+  :group 'flash-emacs)
+
 (defcustom flash-emacs-exclude-modes
   '(image-mode
     pdf-view-mode
@@ -107,10 +113,25 @@ This helps maintain label stability as you type more characters."
   "Face for search matches."
   :group 'flash-emacs)
 
+;; Added: Lighter gray face for dimming (inherits from comment/shadow)
+(defface flash-emacs-dim-face
+  '((t (:inherit (shadow font-lock-comment-face)
+        :weight unspecified
+        :slant unspecified
+        :underline nil
+        :strike-through nil
+        :background unspecified)))
+  "Face used to dim the background text during flash-emacs-jump."
+  :group 'flash-emacs)
+
 ;;; Internal variables
 
 (defvar flash-emacs--overlays nil
   "List of active overlays.")
+
+;; Added: List of active dimming overlays
+(defvar flash-emacs--dim-overlays nil
+  "List of background dimming overlays.")
 
 (defvar flash-emacs--label-positions nil
   "Hash table mapping position keys to previously assigned labels.
@@ -469,9 +490,11 @@ This maintains stability when refining searches but resets on new searches."
     (when label
       (with-current-buffer buffer
         (let ((overlay (make-overlay pos (1+ pos))))
-          (overlay-put overlay 'display 
+          (overlay-put overlay 'display
                        (propertize label 'face 'flash-emacs-label))
           (overlay-put overlay 'flash-emacs 'label)
+          ;; Priority set to ensure visibility over dimming
+          (overlay-put overlay 'priority 200)
           overlay)))))
 
 (defun flash-emacs--create-match-overlay (match)
@@ -483,7 +506,24 @@ This maintains stability when refining searches but resets on new searches."
       (let ((overlay (make-overlay pos end-pos)))
         (overlay-put overlay 'face 'flash-emacs-match)
         (overlay-put overlay 'flash-emacs 'match)
+        ;; Priority set to ensure visibility over dimming
+        (overlay-put overlay 'priority 150)
         overlay))))
+
+;; Added: Logic to dim windows being searched
+(defun flash-emacs--dim-windows ()
+  "Apply dimming overlays to visible areas of searched windows."
+  (when flash-emacs-dim-background
+    (let ((windows (if flash-emacs-multi-window
+                       (window-list)
+                     (list (selected-window)))))
+      (dolist (wnd windows)
+        (with-selected-window wnd
+          (let ((ov (make-overlay (window-start) (window-end))))
+            (overlay-put ov 'window wnd)
+            (overlay-put ov 'face 'flash-emacs-dim-face)
+            (overlay-put ov 'priority 10)
+            (push ov flash-emacs--dim-overlays)))))))
 
 (defun flash-emacs--show-overlays (all-matches labeled-matches)
   "Display overlays for ALL-MATCHES (background) and LABELED-MATCHES (labels)."
@@ -502,6 +542,13 @@ This maintains stability when refining searches but resets on new searches."
   (dolist (overlay flash-emacs--overlays)
     (delete-overlay overlay))
   (setq flash-emacs--overlays nil))
+
+;; Added: Independent cleanup for dimming overlays
+(defun flash-emacs--clear-dim-overlays ()
+  "Remove all background dimming overlays."
+  (dolist (overlay flash-emacs--dim-overlays)
+    (delete-overlay overlay))
+  (setq flash-emacs--dim-overlays nil))
 
 ;;; Input handling
 
@@ -553,6 +600,8 @@ Prioritizes staying in current window if the target buffer is already displayed 
         
         (unwind-protect
             (catch 'flash-exit
+              ;; Added: Trigger dimming at start; stays until jump/cancel
+              (flash-emacs--dim-windows)
               (while t
                 ;; Get input
                 (let* ((prompt (if (> (length pattern) 0)
@@ -613,9 +662,10 @@ Prioritizes staying in current window if the target buffer is already displayed 
                         (current-window (selected-window)))
                     (setq labeled-matches (flash-emacs--assign-labels matches flash-emacs-labels (point) pattern windows current-window)))
                   (flash-emacs--show-overlays matches labeled-matches))))
-          
-          ;; Cleanup
-          (flash-emacs--clear-overlays))))))
+
+          ;; Modified: Ensure both search and dimming overlays are cleared at the end
+          (flash-emacs--clear-overlays)
+          (flash-emacs--clear-dim-overlays))))))
 
 (provide 'flash-emacs)
 
