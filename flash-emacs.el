@@ -574,15 +574,36 @@ Each hook function is called with the selected match.")
 
 (defun flash-emacs--jump-to-match (match)
   "Jump to the position of MATCH.
-Prioritizes staying in current window if the target buffer is already displayed there."
+Prioritizes staying in current window if the target buffer is already displayed there.
+Handles evil visual line mode specially to extend selections properly."
   (let ((target-window (plist-get match :window))
-        (pos (plist-get match :pos)))
+        (pos (plist-get match :pos))
+        (in-evil-visual-mode (and (boundp 'evil-state)
+                                  (eq evil-state 'visual)))
+        (in-evil-visual-line-mode (and (boundp 'evil-state)
+                                       (eq evil-state 'visual)
+                                       (boundp 'evil-visual-selection)
+                                       (eq evil-visual-selection 'line)))
+        original-mark)
 
-    (push-mark)
+    ;; Evil visual mode: preserve the original mark to extend selections properly.
+    ;; Without this, `push-mark` would overwrite the visual selection start point.
+    ;; For visual line mode (V), we explicitly recreate the line selection after jumping.
+
+    (when in-evil-visual-mode
+      (setq original-mark (mark t)))
+
+    (unless in-evil-visual-mode
+      (push-mark))
+
     (select-window target-window)
     (goto-char pos)
 
     ;; Run hooks after jump
+    (when in-evil-visual-line-mode
+      (when (and original-mark (fboundp 'evil-visual-make-selection))
+        (evil-visual-make-selection original-mark (point) 'line)))
+
     (run-hook-with-args 'flash-emacs-jump-hook match)))
 
 ;;; Main function
