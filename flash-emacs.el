@@ -61,6 +61,13 @@
   :type 'boolean
   :group 'flash-emacs)
 
+;; Added: Option for label positioning
+(defcustom flash-emacs-label-position 'after
+  "Where to place jump labels relative to the match."
+  :type '(choice (const :tag "After the match" after)
+          (const :tag "Before the match" before))
+  :group 'flash-emacs)
+
 (defcustom flash-emacs-exclude-modes
   '(image-mode
     pdf-view-mode
@@ -484,12 +491,15 @@ This maintains stability when refining searches but resets on new searches."
 
 (defun flash-emacs--create-label-overlay (match)
   "Create an overlay for the label of MATCH."
-  (let* ((pos (plist-get match :pos))
+  ;; Modified: Check configuration to place label before or after the match
+  (let* ((target-pos (if (eq flash-emacs-label-position 'after)
+                         (plist-get match :end-pos)
+                       (plist-get match :pos)))
          (buffer (plist-get match :buffer))
          (label (plist-get match :label)))
     (when label
       (with-current-buffer buffer
-        (let ((overlay (make-overlay pos (1+ pos))))
+        (let ((overlay (make-overlay target-pos (min (1+ target-pos) (point-max)))))
           (overlay-put overlay 'display
                        (propertize label 'face 'flash-emacs-label))
           (overlay-put overlay 'flash-emacs 'label)
