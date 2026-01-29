@@ -68,12 +68,22 @@
           (const :tag "Before the match" before))
   :group 'flash-emacs)
 
-(defcustom flash-emacs-label-style 'inline
+(defcustom flash-emacs-label-style 'replace
   "How to display jump labels.
 - 'inline: Label appears as virtual text without replacing any characters (flash.nvim style)
 - 'replace: Label replaces the character at the label position"
   :type '(choice (const :tag "Inline virtual text (flash.nvim style)" inline)
           (const :tag "Replace character at position" replace))
+  :group 'flash-emacs)
+
+(defcustom flash-emacs-jump-position 'start
+  "Where to place the cursor after jumping to a match.
+- 'label: Jump to where the label is displayed (follows `flash-emacs-label-position')
+- 'start: Always jump to the start of the match
+- 'end: Always jump to the end of the match"
+  :type '(choice (const :tag "Where label is displayed" label)
+          (const :tag "Start of match" start)
+          (const :tag "End of match" end))
   :group 'flash-emacs)
 
 (defcustom flash-emacs-exclude-modes
@@ -663,9 +673,20 @@ Evil cursor (on a character) semantics."
       (push-mark))
 
     (select-window target-window)
+    
+    ;; Adjust position for Evil visual char/block modes.
+    ;; In Evil, the cursor is ON a character, while Emacs point is BEFORE a character.
+    ;; This can cause the selection to appear one character short when extending forward.
+    ;; We adjust by +1 when extending forward so the selection includes the target character.
+    (when (and (or in-evil-visual-char-mode in-evil-visual-block-mode)
+               original-mark
+               (> pos original-mark)
+               (< pos (point-max)))
+      (setq pos (1+ pos)))
+    
     (goto-char pos)
 
-    ;; Run hooks after jump
+    ;; Recreate visual line selection if needed
     (when in-evil-visual-line-mode
       (when (and original-mark (fboundp 'evil-visual-make-selection))
         (evil-visual-make-selection original-mark (point) 'line)))
