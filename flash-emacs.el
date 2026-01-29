@@ -613,24 +613,49 @@ Supports two styles:
   "Hook run after a successful flash jump.
 Each hook function is called with the selected match.")
 
+(defun flash-emacs--calculate-jump-position (match)
+  "Calculate the jump position for MATCH based on `flash-emacs-jump-position'.
+- 'label: Jump to where the label is displayed (follows `flash-emacs-label-position')
+- 'start: Always jump to the start of the match
+- 'end: Always jump to the end of the match"
+  (let ((start-pos (plist-get match :pos))
+        (end-pos (plist-get match :end-pos)))
+    (cond
+     ((eq flash-emacs-jump-position 'start) start-pos)
+     ((eq flash-emacs-jump-position 'end) end-pos)
+     ;; 'label - follow the label position setting
+     ((eq flash-emacs-label-position 'after) end-pos)
+     (t start-pos))))
+
 (defun flash-emacs--jump-to-match (match)
   "Jump to the position of MATCH.
 Prioritizes staying in current window if the target buffer is already displayed there.
-Handles evil visual line mode specially to extend selections properly."
+Handles evil visual modes specially to extend selections properly.
+Jump position is determined by `flash-emacs-jump-position'.
+
+For Evil visual char/block modes extending forward, adjusts position by -1 to
+account for the difference between Emacs point (between characters) and
+Evil cursor (on a character) semantics."
   (let ((target-window (plist-get match :window))
-        (pos (plist-get match :pos))
+        (pos (flash-emacs--calculate-jump-position match))
         (in-evil-visual-mode (and (boundp 'evil-state)
                                   (eq evil-state 'visual)))
         (in-evil-visual-line-mode (and (boundp 'evil-state)
                                        (eq evil-state 'visual)
                                        (boundp 'evil-visual-selection)
                                        (eq evil-visual-selection 'line)))
+        (in-evil-visual-block-mode (and (boundp 'evil-state)
+                                        (eq evil-state 'visual)
+                                        (boundp 'evil-visual-selection)
+                                        (eq evil-visual-selection 'block)))
+        (in-evil-visual-char-mode (and (boundp 'evil-state)
+                                       (eq evil-state 'visual)
+                                       (boundp 'evil-visual-selection)
+                                       (memq evil-visual-selection '(char nil))))
         original-mark)
 
     ;; Evil visual mode: preserve the original mark to extend selections properly.
     ;; Without this, `push-mark` would overwrite the visual selection start point.
-    ;; For visual line mode (V), we explicitly recreate the line selection after jumping.
-
     (when in-evil-visual-mode
       (setq original-mark (mark t)))
 
