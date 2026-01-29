@@ -68,6 +68,14 @@
           (const :tag "Before the match" before))
   :group 'flash-emacs)
 
+(defcustom flash-emacs-label-style 'inline
+  "How to display jump labels.
+- 'inline: Label appears as virtual text without replacing any characters (flash.nvim style)
+- 'replace: Label replaces the character at the label position"
+  :type '(choice (const :tag "Inline virtual text (flash.nvim style)" inline)
+          (const :tag "Replace character at position" replace))
+  :group 'flash-emacs)
+
 (defcustom flash-emacs-exclude-modes
   '(image-mode
     pdf-view-mode
@@ -490,22 +498,55 @@ This maintains stability when refining searches but resets on new searches."
 ;;; Visual feedback
 
 (defun flash-emacs--create-label-overlay (match)
-  "Create an overlay for the label of MATCH."
-  ;; Modified: Check configuration to place label before or after the match
-  (let* ((target-pos (if (eq flash-emacs-label-position 'after)
-                         (plist-get match :end-pos)
-                       (plist-get match :pos)))
+  "Create an overlay for the label of MATCH.
+Supports two styles:
+- 'inline: Label appears as virtual text without replacing any characters (flash.nvim style)
+- 'replace: Label replaces the character at the label position"
+  (let* ((match-start (plist-get match :pos))
+         (match-end (plist-get match :end-pos))
          (buffer (plist-get match :buffer))
          (label (plist-get match :label)))
     (when label
       (with-current-buffer buffer
-        (let ((overlay (make-overlay target-pos (min (1+ target-pos) (point-max)))))
-          (overlay-put overlay 'display
-                       (propertize label 'face 'flash-emacs-label))
-          (overlay-put overlay 'flash-emacs 'label)
-          ;; Priority set to ensure visibility over dimming
-          (overlay-put overlay 'priority 200)
-          overlay)))))
+        (let ((styled-label (propertize label 'face 'flash-emacs-label)))
+          (cond
+           ;; Inline style: virtual text that doesn't replace any characters
+           ((eq flash-emacs-label-style 'inline)
+            (let ((overlay (make-overlay match-end match-end)))
+              (if (eq flash-emacs-label-position 'after)
+                  ;; After: show label as virtual text right after the match
+                  (overlay-put overlay 'after-string styled-label)
+                ;; Before: show label as virtual text right before the match
+                (progn
+                  (move-overlay overlay match-start match-start)
+                  (overlay-put overlay 'before-string styled-label)))
+              (overlay-put overlay 'flash-emacs 'label)
+              (overlay-put overlay 'priority 200)
+              overlay))
+           
+           ;; Replace style: label replaces a character at the position
+           (t
+            (let* ((target-pos (if (eq flash-emacs-label-position 'after)
+                                   match-end
+                                 match-start))
+                   (char-at-target (char-after target-pos))
+                   ;; Check if target is at newline or end of buffer
+                   (at-newline-or-eob (or (null char-at-target)
+                                          (= char-at-target ?\n))))
+              (if at-newline-or-eob
+                  ;; At newline/EOB: use before-string to avoid replacing newline
+                  ;; (which would merge lines)
+                  (let ((overlay (make-overlay target-pos target-pos)))
+                    (overlay-put overlay 'before-string styled-label)
+                    (overlay-put overlay 'flash-emacs 'label)
+                    (overlay-put overlay 'priority 200)
+                    overlay)
+                ;; Normal case: replace the character with the label
+                (let ((overlay (make-overlay target-pos (1+ target-pos))))
+                  (overlay-put overlay 'display styled-label)
+                  (overlay-put overlay 'flash-emacs 'label)
+                  (overlay-put overlay 'priority 200)
+                  overlay))))))))))
 
 (defun flash-emacs--create-match-overlay (match)
   "Create an overlay for highlighting MATCH."
