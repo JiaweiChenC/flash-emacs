@@ -13,13 +13,27 @@ Add =flash-emacs.el= to your =load-path= and require it:
 
 * Usage
 
+
+** Example 
+
 #+begin_src emacs-lisp
 M-x flash-emacs-jump
 #+end_src
 
+#+attr_org: :width 400
+[[./examples/flash-example.gif]]
+
+#+begin_src 
+flash-emacs-ts-jump
+#+end_src
+
+*pressing f, you can select the label surrounded text, emacs treesitter required*
+#+attr_org: :width 400
+[[./examples/flash-emacs-ts.gif]]
+
 * Options
 
-- =flash-emacs-labels=: characters used for labels, default to only lower cases.
+- =flash-emacs-labels=: characters used for labels, default to all lower and upper cases.
 #+begin_src elisp
 ;; example config, add upper case letters as well.
 (setq flash-emacs-labels "asdghklqwertyuiopzxcvbnmfjASDGHKLQWERTYUIOPZXCVBNMFJ")
@@ -32,6 +46,9 @@ M-x flash-emacs-jump
 - =flash-emacs-auto-jump-single=: if there is only a single match, jump to it without entering the letter.
 - =flash-emacs-exclude-modes=: major modes excluded from search.
 - =flash-emacs-max-buffer-size=: maximum buffer size for searching.
+- =flash-emacs-dim-background=: whether dim the background while search.
+- =flash-emacs-label-style=: whether to replace the text with labels.
+- =flash-emacs-label-position=: where the place the labels.
 
 ** matching color customization 
 You can also customize the color of the matching and the labels:
@@ -56,9 +73,6 @@ Below is an example if "better-jump" package is used:
 (advice-add 'flash-emacs-jump :before #'flash-emacs--set-jump-before-jump)
 #+end_src
 
-* Example 
-#+attr_org: :width 400
-[[./examples/flash-example.gif]]
 
 * Reference 
 + [[https://github.com/folke/flash.nvim][flash.nvim]]
