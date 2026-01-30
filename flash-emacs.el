@@ -2,8 +2,8 @@
 
 ;; Copyright (C) 2024 Free Software Foundation, Inc.
 
-;; Author: Flash-Emacs Contributors
-;; Maintainer: Flash-Emacs Contributors
+;; Author: Jiawei Chen
+;; Maintainer: Jiawei Chen
 ;; Version: 1.0.0
 ;; Package-Requires: ((emacs "26.1") (cl-lib "0.5"))
 ;; Keywords: navigation, jump, search, convenience
