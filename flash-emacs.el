@@ -137,6 +137,32 @@ This helps maintain label stability as you type more characters."
   "Face used to dim the background text during flash-emacs-jump."
   :group 'flash-emacs)
 
+;;; Flash icon
+
+(defconst flash-emacs-icon-xpm
+  "/* XPM */
+static char * flash[] = {
+\"8 10 2 1\",
+\". c None\",
+\"# c #FFD700\",
+\"....##..\",
+\"...##...\",
+\"..##....\",
+\".######.\",
+\"....##..\",
+\"...##...\",
+\"..##....\",
+\".##.....\",
+\"##......\",
+\"#.......\"};
+"
+  "XPM data for the flash lightning bolt icon.")
+
+(defun flash-emacs-icon ()
+  "Return the flash icon as a propertized string for display."
+  (propertize " " 'display
+              `(image :type xpm :ascent center :data ,flash-emacs-icon-xpm)))
+
 ;;; Internal variables
 
 (defvar flash-emacs--overlays nil
@@ -619,7 +645,7 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
             (catch 'flash-exit
               (flash-emacs--dim-windows)
               (while t
-                (let* ((prompt (concat "Flash:" (if (> (length pattern) 0) pattern "")))
+                (let* ((prompt (concat (flash-emacs-icon) ":" (if (> (length pattern) 0) pattern "")))
                        (result (flash-emacs--handle-input
                                 (read-char-exclusive prompt)
                                 pattern labeled-matches original-message)))

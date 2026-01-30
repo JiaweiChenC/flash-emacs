@@ -44,7 +44,7 @@
 ;;; Faces
 
 (defface flash-emacs-ts-label
-  '((t (:background "purple" :foreground "white" :weight bold)))
+  '((t (:background "red" :foreground "white" :weight bold)))
   "Face for treesitter node labels."
   :group 'flash-emacs-ts)
 
@@ -210,15 +210,10 @@ Key bindings during jump:
           (flash-emacs-ts--show-overlays matches)
           (catch 'flash-ts-exit
             (while t
-              (let* ((current-match (nth current-index matches))
-                     (prompt (format "TS [%d/%d] %s: "
-                                     (1+ current-index)
-                                     (length matches)
-                                     (plist-get current-match :type)))
-                     (result (flash-emacs-ts--handle-input 
-                              (read-char-exclusive prompt)
-                              current-index 
-                              matches)))
+              (let ((result (flash-emacs-ts--handle-input 
+                             (read-char-exclusive (concat (flash-emacs-icon) "TS: "))
+                             current-index 
+                             matches)))
                 (pcase result
                   (`(exit . ,_) (throw 'flash-ts-exit (cdr result)))
                   (`(nav . ,new-index) (setq current-index new-index)))))))
