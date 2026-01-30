@@ -25,7 +25,7 @@
   :group 'convenience
   :prefix "flash-emacs-")
 
-(defcustom flash-emacs-labels "asdghklqwertyuiopzxcvbnmfj"
+(defcustom flash-emacs-labels "asdghklqwertyuiopzxcvbnmfjASDGHKLQWERTYUIOPZXCVBNMFJ"
   "Characters used as jump labels."
   :type 'string
   :group 'flash-emacs)
@@ -55,7 +55,7 @@
   :type 'boolean
   :group 'flash-emacs)
 
-(defcustom flash-emacs-dim-background t
+(defcustom flash-emacs-dim-background nil
   "Whether to dim the background during jump navigation."
   :type 'boolean
   :group 'flash-emacs)
