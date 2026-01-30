@@ -461,10 +461,15 @@ This helps maintain label stability as you type more characters."
 
 (defvar evil-state)
 (defvar evil-visual-selection)
+(defvar evil-this-type)
 
 (defun flash-emacs--evil-visual-mode-p ()
   "Return non-nil if in Evil visual mode."
   (and (boundp 'evil-state) (eq evil-state 'visual)))
+
+(defun flash-emacs--evil-operator-mode-p ()
+  "Return non-nil if in Evil operator-pending mode."
+  (and (boundp 'evil-state) (eq evil-state 'operator)))
 
 (defun flash-emacs--evil-visual-selection-type ()
   "Return the Evil visual selection type (char, line, block) or nil."
@@ -473,18 +478,27 @@ This helps maintain label stability as you type more characters."
          (or evil-visual-selection 'char))))
 
 (defun flash-emacs--jump-to-match (match)
-  "Jump to the position of MATCH."
+  "Jump to the position of MATCH.
+Handles Evil visual mode, operator-pending mode, and normal Emacs navigation."
   (let* ((target-window (plist-get match :window))
          (pos (flash-emacs--calculate-jump-position match))
+         (start-point (point))  ; Remember where we started
          (visual-mode (flash-emacs--evil-visual-mode-p))
+         (operator-mode (flash-emacs--evil-operator-mode-p))
          (visual-type (flash-emacs--evil-visual-selection-type))
-         (original-mark (when visual-mode (mark t))))
+         (original-mark (when visual-mode (mark t)))
+         (reference-point (or original-mark start-point)))
+    ;; Note: We don't set evil-this-type here because we handle the
+    ;; position adjustment manually below (same as for visual mode)
+    ;; Push mark for non-visual modes
     (unless visual-mode (push-mark))
     (select-window target-window)
-    ;; Adjust for Evil visual char/block mode extending forward
-    (when (and (memq visual-type '(char block nil))
-               original-mark
-               (> pos original-mark)
+    ;; Adjust position for Evil visual/operator modes extending forward
+    ;; In Evil, cursor is ON a character, while Emacs point is BEFORE a character.
+    ;; For forward motions, we add 1 so the operation includes the target character.
+    (when (and (or (memq visual-type '(char block nil))
+                   operator-mode)
+               (> pos reference-point)
                (< pos (point-max)))
       (cl-incf pos))
     (goto-char pos)
