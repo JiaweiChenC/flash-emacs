@@ -73,6 +73,12 @@ Below is an example if "better-jump" package is used:
 (advice-add 'flash-emacs-jump :before #'flash-emacs--set-jump-before-jump)
 #+end_src
 
+* TODO 
+
++ [X] flash-emacs-jump
++ [X] flash-emacs treesitter integration
++ [ ] flash-emacs search integration 
++ [ ] flash-emacs remote
 
 * Reference 
 + [[https://github.com/folke/flash.nvim][flash.nvim]]
