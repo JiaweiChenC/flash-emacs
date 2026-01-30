@@ -38,7 +38,7 @@
   :group 'flash-emacs
   :prefix "flash-emacs-remote-")
 
-(defcustom flash-emacs-remote-key "s"
+(defcustom flash-emacs-remote-key "r"
   "Key to trigger remote operation in operator-pending mode."
   :type 'string
   :group 'flash-emacs-remote)
@@ -52,6 +52,7 @@
 
 (defvar evil-this-operator)
 (defvar evil-state)
+(defvar evil-inhibit-operator)
 (defvar evil-operator-state-map)
 (defvar evil-motion-state-map)
 (defvar evil-normal-state-map)
@@ -91,10 +92,13 @@
 ;;; Post-command hook for restoration
 
 (defun flash-emacs-remote--post-command ()
-  "Restore after the re-invoked operator completes."
+  "Restore after the re-invoked operator completes.
+For change operator, waits until exiting insert mode."
   (when flash-emacs-remote--waiting
-    ;; Wait until we exit operator-pending state
-    (unless (and (boundp 'evil-state) (eq evil-state 'operator))
+    ;; Wait until we're in normal state
+    ;; This handles: y/d (operator→normal), c (operator→insert→normal)
+    (when (and (boundp 'evil-state)
+               (eq evil-state 'normal))
       (remove-hook 'post-command-hook #'flash-emacs-remote--post-command)
       (when flash-emacs-remote-restore
         (run-at-time 0 nil #'flash-emacs-remote--restore-state)))))
@@ -125,22 +129,42 @@ Use as: ys<search><label>iw to yank inner word at target."
     :type inclusive
     :jump t
     (interactive "<c>")
-    (let ((op evil-this-operator))
+    (let ((op evil-this-operator)
+          (start-pos (point))
+          (start-win (selected-window))
+          (start-buf (current-buffer))
+          target-pos target-win target-buf)
       ;; Save state for restoration BEFORE jumping
       (when flash-emacs-remote-restore
         (flash-emacs-remote--save-state))
-      ;; Abort current operator - we'll re-invoke it
+      ;; Abort current operator
       (setq evil-inhibit-operator t)
-      ;; Do the flash jump
+      ;; Do the flash jump - this moves cursor to target
       (flash-emacs-jump)
-      ;; Re-invoke operator at new location
+      ;; Capture target position
+      (setq target-pos (point)
+            target-win (selected-window)
+            target-buf (current-buffer))
+      ;; Move back to start so Evil sees zero-width range (no-op)
+      (select-window start-win)
+      (switch-to-buffer start-buf)
+      (goto-char start-pos)
+      ;; Schedule the actual remote operation
       (when op
-        (setq prefix-arg count)
-        (call-interactively op)
-        ;; After call-interactively returns, we're in operator-pending mode
-        ;; Set up hook to restore when operator completes
-        (when flash-emacs-remote-restore
-          (flash-emacs-remote--start-waiting)))))
+        (let ((op-key (car (where-is-internal op evil-normal-state-map))))
+          (when op-key
+            (run-at-time 0 nil
+              (lambda ()
+                ;; Go to target
+                (select-window target-win)
+                (switch-to-buffer target-buf)
+                (goto-char target-pos)
+                ;; Set up restoration hook
+                (when flash-emacs-remote-restore
+                  (flash-emacs-remote--start-waiting))
+                ;; Simulate pressing the operator key
+                (setq unread-command-events
+                      (listify-key-sequence op-key)))))))))
 
   ;; Bind in operator-pending mode
   (define-key evil-operator-state-map
