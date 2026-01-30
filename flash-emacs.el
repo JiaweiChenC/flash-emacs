@@ -459,6 +459,9 @@ This helps maintain label stability as you type more characters."
            (plist-get match :end-pos)
          (plist-get match :pos)))))
 
+(defvar evil-state)
+(defvar evil-visual-selection)
+
 (defun flash-emacs--evil-visual-mode-p ()
   "Return non-nil if in Evil visual mode."
   (and (boundp 'evil-state) (eq evil-state 'visual)))

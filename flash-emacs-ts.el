@@ -134,15 +134,17 @@ Each node gets labels at both start and end to show the range."
   "Find the match with the given LABEL in MATCHES."
   (cl-find label matches :key (lambda (m) (plist-get m :label)) :test #'string=))
 
+;; Declare Evil variables to avoid byte-compiler warnings
+(defvar evil-state)
+
 (defun flash-emacs-ts--select-range (match)
   "Select the range of MATCH.
-In Evil visual mode, creates a visual selection.
-Otherwise, sets the region."
+If Evil is available, creates a visual selection.
+Otherwise, sets the Emacs region."
   (let ((start (plist-get match :pos))
         (end (plist-get match :end-pos)))
     (goto-char start)
-    (if-let* (((boundp 'evil-state))
-              ((fboundp 'evil-visual-make-selection)))
+    (if (fboundp 'evil-visual-make-selection)
         (evil-visual-make-selection start (1- end) 'char)
       (push-mark end t t))))
 
