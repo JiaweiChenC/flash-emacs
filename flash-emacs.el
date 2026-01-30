@@ -39,7 +39,7 @@
   "How to handle case sensitivity in search.
 - nil: always case-insensitive
 - t: always case-sensitive
-- 'smart: case-insensitive if pattern is all lowercase, case-sensitive if it contains uppercase"
+- \\='smart: case-insensitive if pattern is all lowercase, case-sensitive if it contains uppercase"
   :type '(choice (const :tag "Always case-insensitive" nil)
           (const :tag "Always case-sensitive" t)
           (const :tag "Smart case (default)" smart))
@@ -55,13 +55,11 @@
   :type 'boolean
   :group 'flash-emacs)
 
-;; Added: Toggle for background dimming
 (defcustom flash-emacs-dim-background t
   "Whether to dim the background during jump navigation."
   :type 'boolean
   :group 'flash-emacs)
 
-;; Added: Option for label positioning
 (defcustom flash-emacs-label-position 'after
   "Where to place jump labels relative to the match."
   :type '(choice (const :tag "After the match" after)
@@ -70,46 +68,37 @@
 
 (defcustom flash-emacs-label-style 'replace
   "How to display jump labels.
-- 'inline: Label appears as virtual text without replacing any characters (flash.nvim style)
-- 'replace: Label replaces the character at the label position"
+- \\='inline: Label appears as virtual text without replacing any characters (flash.nvim style)
+- \\='replace: Label replaces the character at the label position"
   :type '(choice (const :tag "Inline virtual text (flash.nvim style)" inline)
           (const :tag "Replace character at position" replace))
   :group 'flash-emacs)
 
 (defcustom flash-emacs-jump-position 'start
   "Where to place the cursor after jumping to a match.
-- 'label: Jump to where the label is displayed (follows `flash-emacs-label-position')
-- 'start: Always jump to the start of the match
-- 'end: Always jump to the end of the match"
+- \\='label: Jump to where the label is displayed (follows `flash-emacs-label-position')
+- \\='start: Always jump to the start of the match
+- \\='end: Always jump to the end of the match"
   :type '(choice (const :tag "Where label is displayed" label)
           (const :tag "Start of match" start)
           (const :tag "End of match" end))
   :group 'flash-emacs)
 
 (defcustom flash-emacs-exclude-modes
-  '(image-mode
-    pdf-view-mode
-    doc-view-mode
-    archive-mode
-    tar-mode
-    hexl-mode
-    binary-mode
-    ;; fundamental-mode  ; often used for binary files
-    )
+  '(image-mode pdf-view-mode doc-view-mode archive-mode tar-mode hexl-mode binary-mode)
   "List of major modes to exclude from search.
 These modes typically contain binary data or non-textual content."
   :type '(repeat symbol)
   :group 'flash-emacs)
 
 (defcustom flash-emacs-exclude-functions
-  '(flash-emacs--buffer-binary-p
-    flash-emacs--buffer-too-large-p)
+  '(flash-emacs--buffer-binary-p flash-emacs--buffer-too-large-p)
   "List of functions to determine if a buffer should be excluded.
 Each function should take a buffer as argument and return non-nil to exclude it."
   :type '(repeat function)
   :group 'flash-emacs)
 
-(defcustom flash-emacs-max-buffer-size 1048576  ; 1MB
+(defcustom flash-emacs-max-buffer-size 1048576
   "Maximum buffer size to search in bytes.
 Buffers larger than this are excluded to avoid performance issues."
   :type 'integer
@@ -117,9 +106,9 @@ Buffers larger than this are excluded to avoid performance issues."
 
 (defcustom flash-emacs-label-reuse 'lowercase
   "How to reuse labels for positions during search refinement.
-- 'none: never reuse labels, assign new ones each time
-- 'lowercase: reuse only lowercase labels (default)  
-- 'all: reuse both lowercase and uppercase labels
+- \\='none: never reuse labels, assign new ones each time
+- \\='lowercase: reuse only lowercase labels (default)
+- \\='all: reuse both lowercase and uppercase labels
 This helps maintain label stability as you type more characters."
   :type '(choice (const :tag "Never reuse labels" none)
           (const :tag "Reuse lowercase labels" lowercase)
@@ -138,7 +127,6 @@ This helps maintain label stability as you type more characters."
   "Face for search matches."
   :group 'flash-emacs)
 
-;; Added: Lighter gray face for dimming (inherits from comment/shadow)
 (defface flash-emacs-dim-face
   '((t (:inherit (shadow font-lock-comment-face)
         :weight unspecified
@@ -154,634 +142,429 @@ This helps maintain label stability as you type more characters."
 (defvar flash-emacs--overlays nil
   "List of active overlays.")
 
-;; Added: List of active dimming overlays
 (defvar flash-emacs--dim-overlays nil
   "List of background dimming overlays.")
 
 (defvar flash-emacs--label-positions nil
-  "Hash table mapping position keys to previously assigned labels.
-Used to maintain label stability across search refinements.")
+  "Hash table mapping position keys to previously assigned labels.")
 
 (defvar flash-emacs--current-pattern nil
   "Current search pattern for tracking pattern changes.")
 
+;;; Utility functions
+
+(defun flash-emacs--get-windows ()
+  "Get list of windows to search in based on configuration."
+  (if flash-emacs-multi-window (window-list) (list (selected-window))))
+
+(defun flash-emacs--should-ignore-case (pattern)
+  "Determine if search should ignore case based on PATTERN and settings."
+  (pcase flash-emacs-case-sensitive
+    ('nil t)
+    ('t nil)
+    ('smart (string= pattern (downcase pattern)))
+    (_ t)))
+
 ;;; Buffer exclusion functions
 
 (defun flash-emacs--buffer-binary-p (buffer)
-  "Return non-nil if BUFFER contains binary data.
-This checks for null bytes and other indicators of binary content."
+  "Return non-nil if BUFFER contains binary data."
   (with-current-buffer buffer
     (save-excursion
       (goto-char (point-min))
-      (let ((sample-size (min 8192 (buffer-size))))  ; Check first 8KB
+      (let ((sample-size (min 8192 (buffer-size))))
         (when (> sample-size 0)
-          (or 
-           ;; Check for null bytes (common in binary files)
-           (search-forward "\0" (+ (point-min) sample-size) t)
-           ;; Check for very high ratio of non-printable characters
-           (let ((non-printable-count 0)
-                 (char-count 0))
-             (while (and (< (point) (+ (point-min) sample-size))
-                         (not (eobp)))
-               (let ((char (char-after)))
-                 (when char
-                   (setq char-count (1+ char-count))
-                   (when (and (< char 32) (not (memq char '(?\t ?\n ?\r))))
-                     (setq non-printable-count (1+ non-printable-count))))
-                 (forward-char 1)))
-             ;; If more than 30% non-printable chars, likely binary
-             (and (> char-count 0)
-                  (> (/ (* non-printable-count 100) char-count) 30)))))))))
+          (or (search-forward "\0" (+ (point-min) sample-size) t)
+              (let ((non-printable 0)
+                    (total 0))
+                (while (and (< (point) (+ (point-min) sample-size)) (not (eobp)))
+                  (when-let* ((char (char-after)))
+                    (cl-incf total)
+                    (when (and (< char 32) (not (memq char '(?\t ?\n ?\r))))
+                      (cl-incf non-printable)))
+                  (forward-char 1))
+                (and (> total 0) (> (/ (* non-printable 100) total) 30)))))))))
 
 (defun flash-emacs--buffer-too-large-p (buffer)
   "Return non-nil if BUFFER is too large for efficient searching."
-  (with-current-buffer buffer
-    (> (buffer-size) flash-emacs-max-buffer-size)))
+  (> (buffer-size buffer) flash-emacs-max-buffer-size))
 
 (defun flash-emacs--buffer-excluded-p (buffer)
-  "Return non-nil if BUFFER should be excluded from search.
-Checks both major mode exclusions and custom exclusion functions."
+  "Return non-nil if BUFFER should be excluded from search."
   (with-current-buffer buffer
-    (or 
-     ;; Check if major mode is in exclusion list
-     (memq major-mode flash-emacs-exclude-modes)
-     ;; Check custom exclusion functions
-     (cl-some (lambda (func)
-                (and (functionp func)
-                     (funcall func buffer)))
-              flash-emacs-exclude-functions)
-     ;; Skip special buffers (names starting with space) ONLY if they're empty or very small
-     (let ((name (buffer-name)))
-       (and (string-prefix-p " " name)
-            (< (buffer-size) 10)))  ; Allow temp buffers with substantial content
-     ;; Skip system/special buffers starting with * (except common useful ones)
-     (let ((name (buffer-name)))
-       (and (string-prefix-p "*" name)
-            (not (string= "*scratch*" name))
-            (not (string-match "\\*.*\\*<[0-9]+>$" name))  ; Allow numbered buffer copies
-            ;; Don't exclude if it has a file or is a useful buffer
-            (not (buffer-file-name))
-            ;; Exclude common system buffers
-            (or (string-match "^\\*\\(Messages\\|Completions\\|Help\\|Warnings\\|Backtrace\\|Compile-Log\\)" name)
-                ;; Allow other * buffers that might have useful content
-                nil))))))
+    (let ((name (buffer-name)))
+      (or (memq major-mode flash-emacs-exclude-modes)
+          (cl-some (lambda (fn) (and (functionp fn) (funcall fn buffer)))
+                   flash-emacs-exclude-functions)
+          (and (string-prefix-p " " name) (< (buffer-size) 10))
+          (and (string-prefix-p "*" name)
+               (not (string= "*scratch*" name))
+               (not (string-match "\\*.*\\*<[0-9]+>$" name))
+               (not (buffer-file-name))
+               (string-match "^\\*\\(Messages\\|Completions\\|Help\\|Warnings\\|Backtrace\\|Compile-Log\\)" name))))))
 
 ;;; Search functions
 
-(defun flash-emacs--should-ignore-case (pattern)
-  "Determine if search should ignore case based on PATTERN and settings.
-Returns t if case should be ignored (case-insensitive search)."
-  (cond
-   ;; Always case-insensitive
-   ((eq flash-emacs-case-sensitive nil) t)
-   ;; Always case-sensitive
-   ((eq flash-emacs-case-sensitive t) nil)
-   ;; Smart case: ignore case if pattern is all lowercase
-   ((eq flash-emacs-case-sensitive 'smart)
-    (string= pattern (downcase pattern)))
-   ;; Default fallback
-   (t t)))
-
 (defun flash-emacs--get-window-bounds (window)
-  "Get the visible line bounds for WINDOW.
-Returns (start-line . end-line) where lines are 1-indexed."
-  (let ((start-pos (window-start window))
-        (end-pos (window-end window)))
-    (with-current-buffer (window-buffer window)
-      (save-excursion
-        (goto-char start-pos)
-        (let ((start-line (line-number-at-pos)))
-          (goto-char end-pos)
-          (let ((end-line (line-number-at-pos)))
-            (cons start-line end-line)))))))
+  "Get visible (start-pos . end-pos) bounds for WINDOW."
+  (cons (window-start window) (window-end window)))
 
 (defun flash-emacs--search-in-window (pattern window)
-  "Search for PATTERN in WINDOW and return list of matches.
-Only searches within the visible area of the window.
-Skips buffers that should be excluded (binary, too large, etc.)."
-  (let ((buffer (window-buffer window)))
-    ;; Check if buffer should be excluded
-    (if (flash-emacs--buffer-excluded-p buffer)
-        '()  ; Return empty list for excluded buffers
-      (let ((matches '())
-            (case-fold-search (flash-emacs--should-ignore-case pattern)))
-        (with-current-buffer buffer
-          (save-excursion
-            ;; Get visible window bounds
-            (let* ((bounds (flash-emacs--get-window-bounds window))
-                   (start-line (car bounds))
-                   (end-line (cdr bounds)))
-              ;; Move to start of visible area
-              (goto-line start-line)
-              (let ((search-start (point)))
-                ;; Move to end of visible area
-                (goto-line (1+ end-line))
-                (let ((search-end (point)))
-                  ;; Search only within visible bounds
-                  (goto-char search-start)
-                  (while (search-forward pattern search-end t)
-                    (let ((match-start (match-beginning 0))
-                          (match-end (match-end 0)))
-                      (push (list :pos match-start
-                                  :end-pos match-end
-                                  :window window
-                                  :buffer (current-buffer)
-                                  :text (buffer-substring-no-properties match-start match-end))
-                            matches))))))))
-        (nreverse matches)))))
+  "Search for PATTERN in WINDOW and return list of matches."
+  (when-let* ((buffer (window-buffer window))
+              ((not (flash-emacs--buffer-excluded-p buffer))))
+    (let ((case-fold-search (flash-emacs--should-ignore-case pattern))
+          (bounds (flash-emacs--get-window-bounds window))
+          (matches '()))
+      (with-current-buffer buffer
+        (save-excursion
+          (goto-char (car bounds))
+          (while (search-forward pattern (cdr bounds) t)
+            (push (list :pos (match-beginning 0)
+                        :end-pos (match-end 0)
+                        :window window
+                        :buffer buffer
+                        :text (match-string-no-properties 0))
+                  matches))))
+      (nreverse matches))))
 
 (defun flash-emacs--search-pattern (pattern)
-  "Find all matches for PATTERN in currently visible windows only.
-Automatically excludes windows with binary/image buffers and other unsuitable content."
+  "Find all matches for PATTERN in visible windows."
   (when (>= (length pattern) flash-emacs-min-pattern-length)
-    (let ((matches '())
-          (windows (if flash-emacs-multi-window
-                       (window-list)
-                     (list (selected-window)))))
-
-      ;; Search only in visible windows with suitable buffers
-      (dolist (window windows)
-        (when (and (window-live-p window)
-                   (not (flash-emacs--buffer-excluded-p (window-buffer window))))
-          (setq matches (append matches 
-                                (flash-emacs--search-in-window pattern window)))))
-
-      matches)))
+    (cl-loop for window in (flash-emacs--get-windows)
+             when (window-live-p window)
+             append (flash-emacs--search-in-window pattern window))))
 
 ;;; Label assignment
 
 (defun flash-emacs--create-skip-pattern (search-pattern)
-  "Create a skip pattern to avoid label conflicts with search continuation.
-This pattern matches the search pattern followed by any character."
+  "Create a skip pattern for SEARCH-PATTERN to avoid label conflicts."
   (when (and search-pattern (> (length search-pattern) 0))
     (concat (regexp-quote search-pattern) ".")))
 
 (defun flash-emacs--find-conflicting-labels (search-pattern labels window)
-  "Find labels that would conflict with continuing the search pattern.
-Returns a list of labels to exclude. Only searches within visible window bounds.
-Skips excluded buffers (binary, image, etc.)."
-  (let ((buffer (window-buffer window)))
-    ;; Check if buffer should be excluded
-    (if (flash-emacs--buffer-excluded-p buffer)
-        '()  ; Return empty list for excluded buffers
-      (let ((skip-pattern (flash-emacs--create-skip-pattern search-pattern))
-            (conflicting-labels '())
-            (case-fold-search (flash-emacs--should-ignore-case search-pattern)))
-        (when skip-pattern
-          (with-current-buffer buffer
-            (save-excursion
-              ;; Get visible window bounds
-              (let* ((bounds (flash-emacs--get-window-bounds window))
-                     (start-line (car bounds))
-                     (end-line (cdr bounds)))
-                ;; Move to start of visible area
-                (goto-line start-line)
-                (let ((search-start (point)))
-                  ;; Move to end of visible area
-                  (goto-line (1+ end-line))
-                  (let ((search-end (point)))
-                    ;; Search only within visible bounds
-                    (goto-char search-start)
-                    (while (re-search-forward skip-pattern search-end t)
-                      (let* ((match-end (match-end 0))
-                             (following-char (buffer-substring-no-properties 
-                                              (1- match-end) match-end))
-                             (matched-label
-                              (and following-char
-                                   (cl-find-if (lambda (label)
-                                                 (if case-fold-search
-                                                     (string= (downcase following-char)
-                                                              (downcase label))
-                                                   (string= following-char label)))
-                                               labels))))
-                        ;; Check if this following character is in our labels (case-aware)
-                        (when matched-label
-                          (push matched-label conflicting-labels))))))))))
-        (delete-dups conflicting-labels)))))
+  "Find labels that would conflict with continuing SEARCH-PATTERN in WINDOW."
+  (when-let* ((buffer (window-buffer window))
+              ((not (flash-emacs--buffer-excluded-p buffer)))
+              (skip-pattern (flash-emacs--create-skip-pattern search-pattern)))
+    (let ((case-fold-search (flash-emacs--should-ignore-case search-pattern))
+          (bounds (flash-emacs--get-window-bounds window))
+          (conflicts '()))
+      (with-current-buffer buffer
+        (save-excursion
+          (goto-char (car bounds))
+          (while (re-search-forward skip-pattern (cdr bounds) t)
+            (let ((following-char (buffer-substring-no-properties (1- (match-end 0)) (match-end 0))))
+              (when-let* ((matched (cl-find-if
+                                    (lambda (label)
+                                      (if case-fold-search
+                                          (string= (downcase following-char) (downcase label))
+                                        (string= following-char label)))
+                                    labels)))
+                (push matched conflicts))))))
+      (delete-dups conflicts))))
 
 (defun flash-emacs--filter-labels-for-pattern (labels search-pattern windows)
-  "Filter out labels that would conflict with search pattern continuation.
-Only checks windows with suitable (non-excluded) buffers."
-  (if (or (not search-pattern) (= (length search-pattern) 0))
+  "Filter out labels that would conflict with SEARCH-PATTERN continuation."
+  (if (or (not search-pattern) (zerop (length search-pattern)))
       labels
-    (let ((conflicting-labels '()))
-      ;; Collect conflicting labels from all suitable windows
-      (dolist (window windows)
-        (when (and (window-live-p window)
-                   (not (flash-emacs--buffer-excluded-p (window-buffer window))))
-          (setq conflicting-labels 
-                (append conflicting-labels 
-                        (flash-emacs--find-conflicting-labels search-pattern 
-                                                              (mapcar #'char-to-string
-                                                                      (string-to-list labels))
-                                                              window)))))
-      ;; Remove conflicting labels and their case variants
-      (let ((label-chars (string-to-list labels)))
-        (mapconcat #'char-to-string
-                   (cl-remove-if (lambda (label-char)
-                                   (let ((label-str (char-to-string label-char)))
-                                     (or (cl-find label-str conflicting-labels :test #'string=)
-                                         ;; Also remove the opposite case
-                                         (cl-find (if (= label-char (upcase label-char))
-                                                      (downcase label-str)
-                                                    (upcase label-str))
-                                                  conflicting-labels :test #'string=))))
-                                 label-chars)
-                   "")))))
+    (let* ((label-strings (mapcar #'char-to-string (string-to-list labels)))
+           (conflicts (cl-loop for window in windows
+                               when (window-live-p window)
+                               append (flash-emacs--find-conflicting-labels
+                                       search-pattern label-strings window))))
+      (mapconcat #'char-to-string
+                 (cl-remove-if
+                  (lambda (char)
+                    (let ((str (char-to-string char)))
+                      (or (member str conflicts)
+                          (member (if (= char (upcase char))
+                                      (downcase str)
+                                    (upcase str))
+                                  conflicts))))
+                  (string-to-list labels))
+                 ""))))
 
 (defun flash-emacs--distance-from-cursor (match current-point)
-  "Calculate distance of MATCH from cursor at CURRENT-POINT."
-  (let ((match-pos (plist-get match :pos)))
-    (abs (- match-pos current-point))))
+  "Calculate distance of MATCH from CURRENT-POINT."
+  (abs (- (plist-get match :pos) current-point)))
 
 (defun flash-emacs--sort-matches (matches current-point current-window)
-  "Sort MATCHES by window priority (current window first) then by distance from CURRENT-POINT.
-When same buffer is shown in multiple windows, strongly prioritize current window."
-  (sort matches
-        (lambda (a b)
-          (let ((a-window (plist-get a :window))
-                (b-window (plist-get b :window))
-                (a-buffer (plist-get a :buffer))
-                (b-buffer (plist-get b :buffer))
-                (current-buffer (window-buffer current-window))
-                (a-distance (flash-emacs--distance-from-cursor a current-point))
-                (b-distance (flash-emacs--distance-from-cursor b current-point)))
-            ;; First priority: current window
-            (cond
-             ;; Both in current window - sort by distance
-             ((and (eq a-window current-window) (eq b-window current-window))
-              (< a-distance b-distance))
-             ;; A in current window, B not - A wins
-             ((eq a-window current-window)
-              t)
-             ;; B in current window, A not - B wins
-             ((eq b-window current-window)
-              nil)
-             ;; Special case: both matches are in current buffer but different windows
-             ;; Prioritize the one that would keep us in current window
-             ((and (eq a-buffer current-buffer) (eq b-buffer current-buffer)
-                   (not (eq a-window current-window)) (not (eq b-window current-window)))
-              ;; Both are in current buffer but different windows - sort by distance
-              (< a-distance b-distance))
-             ;; A is in current buffer, B is not - A wins
-             ((eq a-buffer current-buffer)
-              t)
-             ;; B is in current buffer, A is not - B wins
-             ((eq b-buffer current-buffer)
-              nil)
-             ;; Neither in current window or buffer - sort by distance
-             (t
-              (< a-distance b-distance)))))))
-
-(defun flash-emacs--assign-labels (matches labels current-point pattern windows current-window)
-  "Assign single-character labels to MATCHES using a two-pass approach for stability.
-First pass tries to reuse existing labels, second pass assigns new labels.
-Prioritizes matches in CURRENT-WINDOW."
-  ;; Initialize label position tracking
-  (unless flash-emacs--label-positions
-    (setq flash-emacs--label-positions (make-hash-table :test 'equal)))
-  
-  ;; Reset if pattern changed significantly
-  (flash-emacs--reset-label-positions pattern)
-  
-  (let* ((filtered-labels (flash-emacs--filter-labels-for-pattern labels pattern windows))
-         (sorted-matches (flash-emacs--sort-matches matches current-point current-window))
-         (available-labels (mapcar #'char-to-string (string-to-list filtered-labels)))
-         (labeled-matches '())
-         (used-labels '()))
-    
-    ;; First pass: Try to reuse existing labels for positions that still exist
-    (dolist (match sorted-matches)
-      (let* ((pos-key (flash-emacs--make-position-key match))
-             (existing-label (gethash pos-key flash-emacs--label-positions)))
-        (when (and existing-label 
-                   (member existing-label available-labels)
-                   (not (member existing-label used-labels))
-                   (flash-emacs--can-reuse-label-p existing-label))
-          (plist-put match :label existing-label)
-          (push existing-label used-labels)
-          (setq available-labels (delete existing-label available-labels))
-          (push match labeled-matches))))
-    
-    ;; Second pass: Assign new labels to unassigned matches
-    (dolist (match sorted-matches)
-      (when (and (not (plist-get match :label))  ; Not labeled in first pass
-                 available-labels)                ; Labels still available
-        (let ((new-label (car available-labels)))
-          (plist-put match :label new-label)
-          (push new-label used-labels)
-          (setq available-labels (cdr available-labels))
-          ;; Remember this assignment for future iterations  
-          (when (flash-emacs--can-reuse-label-p new-label)
-            (puthash (flash-emacs--make-position-key match) new-label flash-emacs--label-positions))
-          (push match labeled-matches))))
-    
-    (nreverse labeled-matches)))
+  "Sort MATCHES by window priority then distance from CURRENT-POINT."
+  (let ((current-buffer (window-buffer current-window)))
+    (sort matches
+          (lambda (a b)
+            (let ((a-win (plist-get a :window))
+                  (b-win (plist-get b :window))
+                  (a-buf (plist-get a :buffer))
+                  (b-buf (plist-get b :buffer))
+                  (a-dist (flash-emacs--distance-from-cursor a current-point))
+                  (b-dist (flash-emacs--distance-from-cursor b current-point)))
+              (cond
+               ((and (eq a-win current-window) (eq b-win current-window))
+                (< a-dist b-dist))
+               ((eq a-win current-window) t)
+               ((eq b-win current-window) nil)
+               ((and (eq a-buf current-buffer) (eq b-buf current-buffer))
+                (< a-dist b-dist))
+               ((eq a-buf current-buffer) t)
+               ((eq b-buf current-buffer) nil)
+               (t (< a-dist b-dist))))))))
 
 (defun flash-emacs--make-position-key (match)
-  "Create a unique position key for MATCH to track label reuse.
-The key includes buffer and position information."
-  (let ((buffer (plist-get match :buffer))
-        (pos (plist-get match :pos)))
-    (format "%s:%d" 
-            (buffer-name buffer)
-            pos)))
+  "Create a unique position key for MATCH."
+  (format "%s:%d" (buffer-name (plist-get match :buffer)) (plist-get match :pos)))
+
+(defun flash-emacs--can-reuse-label-p (label)
+  "Return non-nil if LABEL can be reused based on configuration."
+  (pcase flash-emacs-label-reuse
+    ('none nil)
+    ('all t)
+    ('lowercase (string= label (downcase label)))
+    (_ nil)))
 
 (defun flash-emacs--reset-label-positions (pattern)
-  "Reset label position tracking if pattern changed significantly.
-This maintains stability when refining searches but resets on new searches."
+  "Reset label position tracking if PATTERN changed significantly."
   (when (or (not flash-emacs--current-pattern)
             (not (string-prefix-p flash-emacs--current-pattern pattern))
             (< (length pattern) (length (or flash-emacs--current-pattern ""))))
     (setq flash-emacs--label-positions (make-hash-table :test 'equal)))
   (setq flash-emacs--current-pattern pattern))
 
-(defun flash-emacs--can-reuse-label-p (label)
-  "Return non-nil if LABEL can be reused based on configuration."
-  (cond
-   ((eq flash-emacs-label-reuse 'none) nil)
-   ((eq flash-emacs-label-reuse 'all) t)
-   ((eq flash-emacs-label-reuse 'lowercase)
-    (string= label (downcase label)))
-   (t nil)))
+(defun flash-emacs--assign-labels (matches labels current-point pattern windows current-window)
+  "Assign labels to MATCHES using a two-pass approach for stability."
+  (unless flash-emacs--label-positions
+    (setq flash-emacs--label-positions (make-hash-table :test 'equal)))
+  (flash-emacs--reset-label-positions pattern)
+  (let* ((filtered-labels (flash-emacs--filter-labels-for-pattern labels pattern windows))
+         (sorted-matches (flash-emacs--sort-matches matches current-point current-window))
+         (available (mapcar #'char-to-string (string-to-list filtered-labels)))
+         (used '())
+         (labeled '()))
+    ;; First pass: reuse existing labels
+    (dolist (match sorted-matches)
+      (when-let* ((pos-key (flash-emacs--make-position-key match))
+                  (existing (gethash pos-key flash-emacs--label-positions))
+                  ((member existing available))
+                  ((not (member existing used)))
+                  ((flash-emacs--can-reuse-label-p existing)))
+        (plist-put match :label existing)
+        (push existing used)
+        (setq available (delete existing available))
+        (push match labeled)))
+    ;; Second pass: assign new labels
+    (dolist (match sorted-matches)
+      (when (and (not (plist-get match :label)) available)
+        (let ((new-label (pop available)))
+          (plist-put match :label new-label)
+          (push new-label used)
+          (when (flash-emacs--can-reuse-label-p new-label)
+            (puthash (flash-emacs--make-position-key match) new-label flash-emacs--label-positions))
+          (push match labeled))))
+    (nreverse labeled)))
 
 ;;; Visual feedback
 
+(defun flash-emacs--make-overlay (start end &rest properties)
+  "Create overlay from START to END with PROPERTIES."
+  (let ((ov (make-overlay start end)))
+    (cl-loop for (prop val) on properties by #'cddr
+             do (overlay-put ov prop val))
+    ov))
+
 (defun flash-emacs--create-label-overlay (match)
-  "Create an overlay for the label of MATCH.
-Supports two styles:
-- 'inline: Label appears as virtual text without replacing any characters (flash.nvim style)
-- 'replace: Label replaces the character at the label position"
-  (let* ((match-start (plist-get match :pos))
-         (match-end (plist-get match :end-pos))
-         (buffer (plist-get match :buffer))
-         (label (plist-get match :label)))
-    (when label
-      (with-current-buffer buffer
-        (let ((styled-label (propertize label 'face 'flash-emacs-label)))
-          (cond
-           ;; Inline style: virtual text that doesn't replace any characters
-           ((eq flash-emacs-label-style 'inline)
-            (let ((overlay (make-overlay match-end match-end)))
-              (if (eq flash-emacs-label-position 'after)
-                  ;; After: show label as virtual text right after the match
-                  (overlay-put overlay 'after-string styled-label)
-                ;; Before: show label as virtual text right before the match
-                (progn
-                  (move-overlay overlay match-start match-start)
-                  (overlay-put overlay 'before-string styled-label)))
-              (overlay-put overlay 'flash-emacs 'label)
-              (overlay-put overlay 'priority 200)
-              overlay))
-           
-           ;; Replace style: label replaces a character at the position
-           (t
-            (let* ((target-pos (if (eq flash-emacs-label-position 'after)
-                                   match-end
-                                 match-start))
-                   (char-at-target (char-after target-pos))
-                   ;; Check if target is at newline or end of buffer
-                   (at-newline-or-eob (or (null char-at-target)
-                                          (= char-at-target ?\n))))
-              (if at-newline-or-eob
-                  ;; At newline/EOB: use before-string to avoid replacing newline
-                  ;; (which would merge lines)
-                  (let ((overlay (make-overlay target-pos target-pos)))
-                    (overlay-put overlay 'before-string styled-label)
-                    (overlay-put overlay 'flash-emacs 'label)
-                    (overlay-put overlay 'priority 200)
-                    overlay)
-                ;; Normal case: replace the character with the label
-                (let ((overlay (make-overlay target-pos (1+ target-pos))))
-                  (overlay-put overlay 'display styled-label)
-                  (overlay-put overlay 'flash-emacs 'label)
-                  (overlay-put overlay 'priority 200)
-                  overlay))))))))))
+  "Create an overlay for the label of MATCH."
+  (when-let* ((label (plist-get match :label))
+              (buffer (plist-get match :buffer))
+              (match-start (plist-get match :pos))
+              (match-end (plist-get match :end-pos))
+              (styled-label (propertize label 'face 'flash-emacs-label)))
+    (with-current-buffer buffer
+      (pcase flash-emacs-label-style
+        ('inline
+          (let ((ov (make-overlay (if (eq flash-emacs-label-position 'after) match-end match-start)
+                                  (if (eq flash-emacs-label-position 'after) match-end match-start))))
+            (overlay-put ov (if (eq flash-emacs-label-position 'after) 'after-string 'before-string)
+                         styled-label)
+            (overlay-put ov 'flash-emacs 'label)
+            (overlay-put ov 'priority 200)
+            ov))
+        (_  ; replace style
+         (let* ((target-pos (if (eq flash-emacs-label-position 'after) match-end match-start))
+                (char-at-target (char-after target-pos))
+                (at-newline-or-eob (or (null char-at-target) (= char-at-target ?\n))))
+           (if at-newline-or-eob
+               (flash-emacs--make-overlay target-pos target-pos
+                                          'before-string styled-label
+                                          'flash-emacs 'label
+                                          'priority 200)
+             (flash-emacs--make-overlay target-pos (1+ target-pos)
+                                        'display styled-label
+                                        'flash-emacs 'label
+                                        'priority 200))))))))
 
 (defun flash-emacs--create-match-overlay (match)
   "Create an overlay for highlighting MATCH."
-  (let* ((pos (plist-get match :pos))
-         (end-pos (plist-get match :end-pos))
-         (buffer (plist-get match :buffer)))
-    (with-current-buffer buffer
-      (let ((overlay (make-overlay pos end-pos)))
-        (overlay-put overlay 'face 'flash-emacs-match)
-        (overlay-put overlay 'flash-emacs 'match)
-        ;; Priority set to ensure visibility over dimming
-        (overlay-put overlay 'priority 150)
-        overlay))))
+  (with-current-buffer (plist-get match :buffer)
+    (flash-emacs--make-overlay (plist-get match :pos) (plist-get match :end-pos)
+                               'face 'flash-emacs-match
+                               'flash-emacs 'match
+                               'priority 150)))
 
-;; Added: Logic to dim windows being searched
 (defun flash-emacs--dim-windows ()
   "Apply dimming overlays to visible areas of searched windows."
   (when flash-emacs-dim-background
-    (let ((windows (if flash-emacs-multi-window
-                       (window-list)
-                     (list (selected-window)))))
-      (dolist (wnd windows)
-        (with-selected-window wnd
-          (let ((ov (make-overlay (window-start) (window-end))))
-            (overlay-put ov 'window wnd)
-            (overlay-put ov 'face 'flash-emacs-dim-face)
-            (overlay-put ov 'priority 10)
-            (push ov flash-emacs--dim-overlays)))))))
+    (dolist (wnd (flash-emacs--get-windows))
+      (with-selected-window wnd
+        (push (flash-emacs--make-overlay (window-start) (window-end)
+                                         'window wnd
+                                         'face 'flash-emacs-dim-face
+                                         'priority 10)
+              flash-emacs--dim-overlays)))))
 
 (defun flash-emacs--show-overlays (all-matches labeled-matches)
-  "Display overlays for ALL-MATCHES (background) and LABELED-MATCHES (labels)."
+  "Display overlays for ALL-MATCHES and LABELED-MATCHES."
   (flash-emacs--clear-overlays)
-  ;; Show background highlighting for ALL matches
   (dolist (match all-matches)
-    (when-let* ((match-overlay (flash-emacs--create-match-overlay match)))
-      (push match-overlay flash-emacs--overlays)))
-  ;; Show labels only for labeled matches
+    (push (flash-emacs--create-match-overlay match) flash-emacs--overlays))
   (dolist (match labeled-matches)
-    (when-let* ((label-overlay (flash-emacs--create-label-overlay match)))
-      (push label-overlay flash-emacs--overlays))))
+    (when-let* ((ov (flash-emacs--create-label-overlay match)))
+      (push ov flash-emacs--overlays))))
 
 (defun flash-emacs--clear-overlays ()
   "Remove all flash overlays."
-  (dolist (overlay flash-emacs--overlays)
-    (delete-overlay overlay))
+  (mapc #'delete-overlay flash-emacs--overlays)
   (setq flash-emacs--overlays nil))
 
-;; Added: Independent cleanup for dimming overlays
 (defun flash-emacs--clear-dim-overlays ()
   "Remove all background dimming overlays."
-  (dolist (overlay flash-emacs--dim-overlays)
-    (delete-overlay overlay))
+  (mapc #'delete-overlay flash-emacs--dim-overlays)
   (setq flash-emacs--dim-overlays nil))
 
 ;;; Input handling
 
 (defun flash-emacs--find-match-by-label (label matches)
-  "Find the match with the given LABEL in MATCHES."
-  (cl-find-if (lambda (match)
-                (string= (plist-get match :label) label))
-              matches))
+  "Find the match with LABEL in MATCHES."
+  (cl-find label matches :key (lambda (m) (plist-get m :label)) :test #'string=))
 
 (defvar flash-emacs-jump-hook nil
-  "Hook run after a successful flash jump.
-Each hook function is called with the selected match.")
+  "Hook run after a successful flash jump.")
 
 (defun flash-emacs--calculate-jump-position (match)
-  "Calculate the jump position for MATCH based on `flash-emacs-jump-position'.
-- 'label: Jump to where the label is displayed (follows `flash-emacs-label-position')
-- 'start: Always jump to the start of the match
-- 'end: Always jump to the end of the match"
-  (let ((start-pos (plist-get match :pos))
-        (end-pos (plist-get match :end-pos)))
-    (cond
-     ((eq flash-emacs-jump-position 'start) start-pos)
-     ((eq flash-emacs-jump-position 'end) end-pos)
-     ;; 'label - follow the label position setting
-     ((eq flash-emacs-label-position 'after) end-pos)
-     (t start-pos))))
+  "Calculate the jump position for MATCH."
+  (pcase flash-emacs-jump-position
+    ('start (plist-get match :pos))
+    ('end (plist-get match :end-pos))
+    (_ (if (eq flash-emacs-label-position 'after)
+           (plist-get match :end-pos)
+         (plist-get match :pos)))))
+
+(defun flash-emacs--evil-visual-mode-p ()
+  "Return non-nil if in Evil visual mode."
+  (and (boundp 'evil-state) (eq evil-state 'visual)))
+
+(defun flash-emacs--evil-visual-selection-type ()
+  "Return the Evil visual selection type (char, line, block) or nil."
+  (when (flash-emacs--evil-visual-mode-p)
+    (and (boundp 'evil-visual-selection)
+         (or evil-visual-selection 'char))))
 
 (defun flash-emacs--jump-to-match (match)
-  "Jump to the position of MATCH.
-Prioritizes staying in current window if the target buffer is already displayed there.
-Handles evil visual modes specially to extend selections properly.
-Jump position is determined by `flash-emacs-jump-position'.
-
-For Evil visual char/block modes extending forward, adjusts position by -1 to
-account for the difference between Emacs point (between characters) and
-Evil cursor (on a character) semantics."
-  (let ((target-window (plist-get match :window))
-        (pos (flash-emacs--calculate-jump-position match))
-        (in-evil-visual-mode (and (boundp 'evil-state)
-                                  (eq evil-state 'visual)))
-        (in-evil-visual-line-mode (and (boundp 'evil-state)
-                                       (eq evil-state 'visual)
-                                       (boundp 'evil-visual-selection)
-                                       (eq evil-visual-selection 'line)))
-        (in-evil-visual-block-mode (and (boundp 'evil-state)
-                                        (eq evil-state 'visual)
-                                        (boundp 'evil-visual-selection)
-                                        (eq evil-visual-selection 'block)))
-        (in-evil-visual-char-mode (and (boundp 'evil-state)
-                                       (eq evil-state 'visual)
-                                       (boundp 'evil-visual-selection)
-                                       (memq evil-visual-selection '(char nil))))
-        original-mark)
-
-    ;; Evil visual mode: preserve the original mark to extend selections properly.
-    ;; Without this, `push-mark` would overwrite the visual selection start point.
-    (when in-evil-visual-mode
-      (setq original-mark (mark t)))
-
-    (unless in-evil-visual-mode
-      (push-mark))
-
+  "Jump to the position of MATCH."
+  (let* ((target-window (plist-get match :window))
+         (pos (flash-emacs--calculate-jump-position match))
+         (visual-mode (flash-emacs--evil-visual-mode-p))
+         (visual-type (flash-emacs--evil-visual-selection-type))
+         (original-mark (when visual-mode (mark t))))
+    (unless visual-mode (push-mark))
     (select-window target-window)
-    
-    ;; Adjust position for Evil visual char/block modes.
-    ;; In Evil, the cursor is ON a character, while Emacs point is BEFORE a character.
-    ;; This can cause the selection to appear one character short when extending forward.
-    ;; We adjust by +1 when extending forward so the selection includes the target character.
-    (when (and (or in-evil-visual-char-mode in-evil-visual-block-mode)
+    ;; Adjust for Evil visual char/block mode extending forward
+    (when (and (memq visual-type '(char block nil))
                original-mark
                (> pos original-mark)
                (< pos (point-max)))
-      (setq pos (1+ pos)))
-    
+      (cl-incf pos))
     (goto-char pos)
-
     ;; Recreate visual line selection if needed
-    (when in-evil-visual-line-mode
-      (when (and original-mark (fboundp 'evil-visual-make-selection))
-        (evil-visual-make-selection original-mark (point) 'line)))
-
+    (when (and (eq visual-type 'line)
+               original-mark
+               (fboundp 'evil-visual-make-selection))
+      (evil-visual-make-selection original-mark (point) 'line))
     (run-hook-with-args 'flash-emacs-jump-hook match)))
+
+;;; Input handling for main loop
+
+(defun flash-emacs--handle-input (char pattern labeled-matches original-message)
+  "Handle input CHAR with current PATTERN and LABELED-MATCHES.
+ORIGINAL-MESSAGE is the original message function.
+Returns (action . value) where action is exit, backspace, add-char, or nil."
+  (cond
+   ;; ESC or C-g
+   ((memq char '(27 7))
+    (funcall original-message "Flash cancelled")
+    (cons 'exit nil))
+   ;; Enter - jump to first match
+   ((= char 13)
+    (when-let* ((first-match (car labeled-matches)))
+      (flash-emacs--jump-to-match first-match))
+    (cons 'exit nil))
+   ;; Backspace
+   ((memq char '(127 8))
+    (if (> (length pattern) 0)
+        (cons 'backspace (substring pattern 0 -1))
+      (cons 'exit nil)))
+   ;; Printable ASCII
+   ((and (>= char 32) (<= char 126))
+    (let ((char-str (char-to-string char)))
+      (if-let* ((target (flash-emacs--find-match-by-label char-str labeled-matches)))
+          (progn (flash-emacs--jump-to-match target)
+                 (cons 'exit nil))
+        (cons 'add-char (concat pattern char-str)))))
+   (t nil)))
 
 ;;; Main function
 
 ;;;###autoload
 (defun flash-emacs-jump ()
-  "Start flash jump mode - simple version."
+  "Start flash jump mode."
   (interactive)
-  ;; Reset label positions for new session
   (setq flash-emacs--label-positions (make-hash-table :test 'equal)
         flash-emacs--current-pattern nil)
-  
-  ;; Suppress all messages during flash operation to prevent "mark set" and other unwanted messages
   (let ((original-message (symbol-function 'message)))
-    (cl-letf (((symbol-function 'message) 
-               (lambda (format-string &rest args)
-                 ;; Only allow specific flash-related messages
-                 (when (and format-string 
-                            (string-match-p "\\(Flash\\|cancelled\\)" format-string))
-                   (apply original-message format-string args)))))
-      
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (when (and fmt (string-match-p "\\(Flash\\|cancelled\\)" fmt))
+                   (apply original-message fmt args)))))
       (let ((pattern "")
             (matches '())
             (labeled-matches '()))
-        
         (unwind-protect
             (catch 'flash-exit
-              ;; Added: Trigger dimming at start; stays until jump/cancel
               (flash-emacs--dim-windows)
               (while t
-                ;; Get input
-                (let* ((prompt (if (> (length pattern) 0)
-                                   (concat "Flash:" pattern)
-                                 "Flash:"))
-                       (char (read-char-exclusive prompt)))
-                  
-                  (cond
-                   ;; ESC or C-g - exit
-                   ((or (= char 27) (= char 7))
-                    (funcall original-message "Flash cancelled")
-                    (throw 'flash-exit nil))
-                   
-                   ;; Enter - jump to first match
-                   ((= char 13)
-                    (when (car labeled-matches)
-                      (flash-emacs--jump-to-match (car labeled-matches)))
-                    (throw 'flash-exit nil))
-                   
-                   ;; Backspace - remove last character
-                   ((or (= char 127) (= char 8))
-                    (if (> (length pattern) 0)
-                        (setq pattern (substring pattern 0 -1))
-                      (throw 'flash-exit nil)))
-                   
-                   ;; Check if it's a jump label
-                   ((and (>= char 32) (<= char 126))  ; Printable ASCII
-                    (let* ((new-char (char-to-string char))
-                           (target-match (flash-emacs--find-match-by-label new-char labeled-matches)))
-                      (if target-match
-                          ;; It's a jump label - perform the jump
-                          (progn
-                            (flash-emacs--jump-to-match target-match)
-                            (throw 'flash-exit nil))
-                        ;; It's a regular character - add to search pattern
-                        (setq pattern (concat pattern new-char)))))
-                   
-                   ;; Unknown character - ignore
-                   (t nil))
-                  
-                  ;; Update search results
+                (let* ((prompt (concat "Flash:" (if (> (length pattern) 0) pattern "")))
+                       (result (flash-emacs--handle-input
+                                (read-char-exclusive prompt)
+                                pattern labeled-matches original-message)))
+                  (pcase result
+                    (`(exit . ,_) (throw 'flash-exit nil))
+                    (`(backspace . ,new-pattern) (setq pattern new-pattern))
+                    (`(add-char . ,new-pattern) (setq pattern new-pattern)))
+                  ;; Update search
                   (setq matches (flash-emacs--search-pattern pattern))
-                  
-                  ;; Check for zero matches and exit automatically
-                  (when (and (> (length pattern) 0) (= (length matches) 0))
-                    ;; Don't show "no matches" message during interactive search
+                  ;; Exit if no matches
+                  (when (and (> (length pattern) 0) (null matches))
                     (throw 'flash-exit nil))
-
-                  ;; Auto-jump if exactly one match and option is enabled
-                  (when (and flash-emacs-auto-jump-single
-                             (= (length matches) 1))
+                  ;; Auto-jump if single match
+                  (when (and flash-emacs-auto-jump-single (= (length matches) 1))
                     (flash-emacs--jump-to-match (car matches))
                     (throw 'flash-exit nil))
-
-                  (let ((windows (if flash-emacs-multi-window
-                                     (window-list)
-                                   (list (selected-window))))
-                        (current-window (selected-window)))
-                    (setq labeled-matches (flash-emacs--assign-labels matches flash-emacs-labels (point) pattern windows current-window)))
+                  ;; Update labels and display
+                  (setq labeled-matches
+                        (flash-emacs--assign-labels matches flash-emacs-labels (point)
+                                                    pattern (flash-emacs--get-windows)
+                                                    (selected-window)))
                   (flash-emacs--show-overlays matches labeled-matches))))
-
-          ;; Modified: Ensure both search and dimming overlays are cleared at the end
           (flash-emacs--clear-overlays)
           (flash-emacs--clear-dim-overlays))))))
 
