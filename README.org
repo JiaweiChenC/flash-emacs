@@ -27,6 +27,7 @@ M-x flash-emacs-jump
 flash-emacs-ts-jump
 #+end_src
 
+*pressing f, you can select the label surrounded text, emacs treesitter required*
 #+attr_org: :width 400
 [[./examples/flash-emacs-ts.gif]]
 
