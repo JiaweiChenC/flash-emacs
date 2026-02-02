@@ -94,16 +94,20 @@ Uses replace style - the label replaces the character after the match."
            (char-at-pos (char-after end-pos))
            (at-newline-or-eob (or (null char-at-pos) (= char-at-pos ?\n)))
            (ov (if at-newline-or-eob
-                   ;; At newline or end of buffer, use before-string
+                   ;; At newline or end of buffer, use after-string with high priority
+                   ;; This ensures flash labels appear BEFORE other after-string overlays
+                   ;; (like search count overlays) due to higher priority
                    (let ((o (make-overlay end-pos end-pos)))
-                     (overlay-put o 'before-string label-str)
+                     (overlay-put o 'after-string label-str)
                      o)
                  ;; Replace the character after the match
                  (let ((o (make-overlay end-pos (1+ end-pos))))
                    (overlay-put o 'display label-str)
                    o))))
       (overlay-put ov 'flash-emacs-search t)
-      (overlay-put ov 'priority 10000)
+      ;; Very high priority so flash labels appear before other overlays
+      ;; at same position (like search count [x/y] overlays)
+      (overlay-put ov 'priority 20000)
       (overlay-put ov 'window win)
       ov)))
 
