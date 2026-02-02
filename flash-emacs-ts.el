@@ -119,31 +119,58 @@ When enabled, labels at different depths have different colors."
 (defvar flash-emacs-ts--overlays nil
   "List of active treesitter overlays.")
 
+(defvar-local flash-emacs-ts--parser nil
+  "Cached tree-sitter parser for the current buffer.")
+
 ;;; Core functions
 
 (defun flash-emacs-ts--get-parser ()
-  "Get or create treesitter parser for current buffer.
-Returns nil if treesitter is not available for this buffer."
-  (when-let* (((treesit-available-p))
-              (lang (treesit-language-at (point))))
-    (treesit-parser-create lang)))
+  "Get or create a tree-sitter parser for the current buffer.
+Returns nil if no suitable grammar is installed.
+Supports modes that don't natively use treesit (like org-mode)."
+  (when (treesit-available-p)
+    (or
+     ;; Reuse cached parser if it is still alive
+     (and flash-emacs-ts--parser
+          (treesit-parser-p flash-emacs-ts--parser)
+          flash-emacs-ts--parser)
+
+     ;; If we're in org-mode, try org grammar explicitly
+     (when (derived-mode-p 'org-mode)
+       (when (treesit-language-available-p 'org)
+         (setq flash-emacs-ts--parser (treesit-parser-create 'org))))
+
+     ;; If we're in markdown-mode, try markdown grammar
+     (when (derived-mode-p 'markdown-mode)
+       (when (treesit-language-available-p 'markdown)
+         (setq flash-emacs-ts--parser (treesit-parser-create 'markdown))))
+
+     ;; Otherwise fall back to whatever language-at-point says (ts modes)
+     (when-let* ((lang (treesit-language-at (point))))
+       (when (treesit-language-available-p lang)
+         (setq flash-emacs-ts--parser (treesit-parser-create lang)))))))
 
 (defun flash-emacs-ts--get-nodes-at-point ()
-  "Get all treesitter nodes containing point, from innermost to outermost.
-Returns a list of nodes, starting with the smallest node at point
-and including all parent nodes up to the root.
-Deduplicates nodes with identical ranges."
-  (when-let* ((_parser (flash-emacs-ts--get-parser))
-              (node (treesit-node-at (point))))
+  "Get named treesitter nodes containing point, from innermost to outermost.
+Returns a list of NAMED nodes only (like flash.nvim's named_node_for_range),
+starting with the smallest named node at point and including parent nodes.
+Deduplicates nodes with identical ranges.
+Passes parser explicitly to support non-treesit modes like org-mode."
+  (when-let* ((parser (flash-emacs-ts--get-parser))
+              ;; Pass parser explicitly - crucial for org-mode support
+              (node (treesit-node-at (point) parser)))
     (let ((nodes '())
           (seen-ranges (make-hash-table :test 'equal)))
+      ;; Walk up to find named nodes only (skip anonymous tokens)
       (while node
-        (let ((range-key (format "%d:%d" 
-                                 (treesit-node-start node) 
-                                 (treesit-node-end node))))
-          (unless (gethash range-key seen-ranges)
-            (puthash range-key t seen-ranges)
-            (push node nodes)))
+        ;; Only include named nodes (actual syntax constructs)
+        (when (treesit-node-check node 'named)
+          (let ((range-key (format "%d:%d" 
+                                   (treesit-node-start node) 
+                                   (treesit-node-end node))))
+            (unless (gethash range-key seen-ranges)
+              (puthash range-key t seen-ranges)
+              (push node nodes))))
         (setq node (treesit-node-parent node)))
       (nreverse nodes))))
 
