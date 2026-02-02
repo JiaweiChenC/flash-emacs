@@ -122,32 +122,29 @@ Uses replace style - the label replaces the character after the match."
 
 ;;; Match finding
 
-(defun flash-emacs-search--find-matches (pattern)
-  "Find all visible matches for PATTERN and return as match list.
+(defun flash-emacs-search--find-all-matches (pattern)
+  "Find ALL matches for PATTERN in the entire buffer.
 PATTERN is treated as a literal string for searching."
   (when (and pattern (>= (length pattern) flash-emacs-search-min-length))
     (let ((matches '())
-          ;; Use the same case-sensitivity as flash-emacs
           (case-fold-search (flash-emacs--should-ignore-case pattern))
-          ;; Quote the pattern for literal matching
-          (search-regexp (regexp-quote pattern)))
-      ;; Only search in non-minibuffer windows
-      (dolist (win (flash-emacs-search--get-windows))
-        (with-selected-window win
-          (save-excursion
-            (goto-char (window-start))
-            (let ((limit (window-end nil t)))
-              (condition-case nil
-                  (while (re-search-forward search-regexp limit t)
-                    (let ((start (match-beginning 0))
-                          (end (match-end 0)))
-                      (unless (= start end)
-                        (push (list :pos start
-                                    :end-pos end
-                                    :window win
-                                    :buffer (current-buffer))
-                              matches))))
-                (invalid-regexp nil))))))
+          (search-regexp (regexp-quote pattern))
+          (win (or (minibuffer-selected-window) (selected-window))))
+      ;; Search entire buffer
+      (with-selected-window win
+        (save-excursion
+          (goto-char (point-min))
+          (condition-case nil
+              (while (re-search-forward search-regexp nil t)
+                (let ((start (match-beginning 0))
+                      (end (match-end 0)))
+                  (unless (= start end)
+                    (push (list :pos start
+                                :end-pos end
+                                :window win
+                                :buffer (current-buffer))
+                          matches))))
+            (invalid-regexp nil))))
       (nreverse matches))))
 
 ;;; Label assignment
