@@ -151,7 +151,8 @@ Returns nil if position is inside an org image overlay."
 
 (defun flash-emacs-search--find-visible-matches (pattern)
   "Find matches for PATTERN in the VISIBLE area only (like flash.nvim).
-PATTERN is treated as a literal string for searching."
+PATTERN is treated as a literal string for searching.
+Skips matches inside org image overlays (e.g., org-sliced-images)."
   (when (and pattern (>= (length pattern) flash-emacs-search-min-length))
     (let ((matches '())
           (case-fold-search (flash-emacs--should-ignore-case pattern))
@@ -167,7 +168,10 @@ PATTERN is treated as a literal string for searching."
                             (<= (match-beginning 0) win-end))
                   (let ((start (match-beginning 0))
                         (end (match-end 0)))
-                    (unless (= start end)
+                    ;; Skip matches inside org image overlays
+                    (unless (or (= start end)
+                                (flash-emacs-search--in-image-overlay-p start)
+                                (flash-emacs-search--in-image-overlay-p end))
                       (push (list :pos start
                                   :end-pos end
                                   :window win
@@ -315,7 +319,9 @@ Key behavior matching flash.nvim:
                        (plist-get match :end-pos)
                        label
                        win)))
-              (push ov flash-emacs-search--overlays))))))))
+              ;; Only add if overlay was created (not skipped due to image overlay)
+              (when ov
+                (push ov flash-emacs-search--overlays)))))))))
 
 ;;; Jump handling
 
