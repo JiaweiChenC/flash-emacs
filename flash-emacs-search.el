@@ -73,7 +73,7 @@
   "List of flash search overlays.")
 
 (defvar flash-emacs-search--all-matches nil
-  "All labeled matches for entire buffer (computed once per pattern).")
+  "All labeled matches for visible area.")
 
 (defvar flash-emacs-search--current-pattern nil
   "Current search pattern (to detect changes).")
@@ -81,13 +81,16 @@
 (defvar flash-emacs-search--original-buffer nil
   "Buffer where search started.")
 
-(defvar flash-emacs-search--initial-point nil
-  "Cursor position when search started (for distance sorting).")
+(defvar flash-emacs-search--used-labels nil
+  "Hash table mapping positions to assigned labels (persists during search session).")
+
+(defvar flash-emacs-search--available-labels nil
+  "List of labels still available to assign.")
 
 ;;; Overlay management
 
 (defun flash-emacs-search--clear-overlays ()
-  "Clear all flash search overlays (but keep match data)."
+  "Clear all flash search overlays."
   (mapc #'delete-overlay flash-emacs-search--overlays)
   (setq flash-emacs-search--overlays nil))
 
@@ -95,7 +98,9 @@
   "Clear overlays and all match data."
   (flash-emacs-search--clear-overlays)
   (setq flash-emacs-search--all-matches nil
-        flash-emacs-search--current-pattern nil))
+        flash-emacs-search--current-pattern nil
+        flash-emacs-search--used-labels nil
+        flash-emacs-search--available-labels nil))
 
 (defun flash-emacs-search--create-label-overlay (end-pos label win)
   "Create a label overlay at END-POS (after match) with LABEL in window WIN.
@@ -133,29 +138,31 @@ Uses replace style - the label replaces the character after the match."
 
 ;;; Match finding
 
-(defun flash-emacs-search--find-all-matches (pattern)
-  "Find ALL matches for PATTERN in the entire buffer.
+(defun flash-emacs-search--find-visible-matches (pattern)
+  "Find matches for PATTERN in the VISIBLE area only (like flash.nvim).
 PATTERN is treated as a literal string for searching."
   (when (and pattern (>= (length pattern) flash-emacs-search-min-length))
     (let ((matches '())
           (case-fold-search (flash-emacs--should-ignore-case pattern))
           (search-regexp (regexp-quote pattern))
           (win (or (minibuffer-selected-window) (selected-window))))
-      ;; Search entire buffer
       (with-selected-window win
-        (save-excursion
-          (goto-char (point-min))
-          (condition-case nil
-              (while (re-search-forward search-regexp nil t)
-                (let ((start (match-beginning 0))
-                      (end (match-end 0)))
-                  (unless (= start end)
-                    (push (list :pos start
-                                :end-pos end
-                                :window win
-                                :buffer (current-buffer))
-                          matches))))
-            (invalid-regexp nil))))
+        (let ((win-start (window-start win))
+              (win-end (window-end win t)))
+          (save-excursion
+            (goto-char win-start)
+            (condition-case nil
+                (while (and (re-search-forward search-regexp nil t)
+                            (<= (match-beginning 0) win-end))
+                  (let ((start (match-beginning 0))
+                        (end (match-end 0)))
+                    (unless (= start end)
+                      (push (list :pos start
+                                  :end-pos end
+                                  :window win
+                                  :buffer (current-buffer))
+                            matches))))
+              (invalid-regexp nil)))))
       (nreverse matches))))
 
 ;;; Label assignment
@@ -200,55 +207,78 @@ Since search wraps around, we need to check the whole buffer, not just visible."
                   (string-to-list labels))
                  ""))))
 
-(defun flash-emacs-search--assign-labels (matches pattern)
-  "Assign labels to MATCHES, avoiding conflicts with PATTERN continuation.
+(defun flash-emacs-search--init-labels (pattern)
+  "Initialize available labels for PATTERN (called once per pattern change)."
+  (let ((filtered-labels (flash-emacs-search--filter-labels flash-emacs-labels pattern)))
+    (setq flash-emacs-search--used-labels (make-hash-table :test 'equal)
+          flash-emacs-search--available-labels
+          (mapcar #'char-to-string (string-to-list filtered-labels)))))
 
-For search, we check the ENTIRE buffer for conflicts (not just visible)
-since search can wrap around. Labels are assigned based on buffer position
-to ensure stability (like flash.nvim)."
-  (let* ((filtered-labels (flash-emacs-search--filter-labels flash-emacs-labels pattern))
-         ;; Sort by buffer position (stable, like flash.nvim)
-         (sorted-matches (sort (copy-sequence matches)
-                               (lambda (a b)
-                                 (< (plist-get a :pos) (plist-get b :pos)))))
-         (available (mapcar #'char-to-string (string-to-list filtered-labels)))
-         (labeled '()))
-    ;; Assign labels in buffer order
+(defun flash-emacs-search--assign-labels (matches pattern)
+  "Assign labels to MATCHES using flash.nvim's two-pass approach.
+
+Pass 1: Reuse previously assigned labels from `used-labels` table.
+Pass 2: Assign new labels from `available-labels` for remaining matches.
+
+Labels persist in `used-labels` so same positions get same labels across scrolls."
+  (let* ((current-window (or (minibuffer-selected-window) (selected-window)))
+         (current-point (with-selected-window current-window (point)))
+         (sorted-matches (flash-emacs--sort-matches matches current-point current-window)))
+    ;; Pass 1: Reuse existing labels from used-labels table
     (dolist (match sorted-matches)
-      (when available
-        (let ((label (pop available)))
-          (plist-put match :label label)
-          (push match labeled))))
-    (nreverse labeled)))
+      (let* ((pos (plist-get match :pos))
+             (existing-label (gethash pos flash-emacs-search--used-labels)))
+        (when (and existing-label
+                   (member existing-label flash-emacs-search--available-labels))
+          ;; Reuse the label and remove from available
+          (plist-put match :label existing-label)
+          (setq flash-emacs-search--available-labels
+                (delete existing-label flash-emacs-search--available-labels)))))
+    ;; Pass 2: Assign new labels to matches without labels
+    (dolist (match sorted-matches)
+      (unless (plist-get match :label)
+        (when flash-emacs-search--available-labels
+          (let ((new-label (pop flash-emacs-search--available-labels)))
+            (plist-put match :label new-label)
+            ;; Remember this label for this position
+            (puthash (plist-get match :pos) new-label flash-emacs-search--used-labels)))))
+    ;; Return only matches that got labels
+    (cl-remove-if-not (lambda (m) (plist-get m :label)) sorted-matches)))
 
 ;;; Display
 
-(defun flash-emacs-search--compute-labels (pattern)
-  "Compute labels for ALL matches of PATTERN in buffer.
-Labels are assigned once and stored - they don't change when scrolling."
+(defun flash-emacs-search--show-labels (pattern)
+  "Find visible matches and assign labels (like flash.nvim).
+
+Key behavior matching flash.nvim:
+- Labels are initialized once per pattern (used-labels table persists)
+- On each update, available-labels is reset but used-labels persists
+- Two-pass labeling: first reuse existing labels, then assign new ones
+- This ensures same positions get same labels across scrolls/navigation."
+  (flash-emacs-search--clear-overlays)
+  (setq flash-emacs-search--all-matches nil)
   (when (and flash-emacs-search--active
              pattern
              (>= (length pattern) flash-emacs-search-min-length))
-    (let* ((matches (flash-emacs-search--find-all-matches pattern))
-           (labeled (flash-emacs-search--assign-labels matches pattern)))
-      (setq flash-emacs-search--all-matches labeled
-            flash-emacs-search--current-pattern pattern))))
-
-(defun flash-emacs-search--display-visible-labels ()
-  "Display labels only for currently visible matches.
-Uses pre-computed labels from `flash-emacs-search--all-matches`."
-  (flash-emacs-search--clear-overlays)
-  (when flash-emacs-search--all-matches
+    ;; Initialize labels only when pattern changes (like flash.nvim's M.new)
+    (unless (and (equal pattern flash-emacs-search--current-pattern)
+                 flash-emacs-search--used-labels)
+      (flash-emacs-search--init-labels pattern)
+      (setq flash-emacs-search--current-pattern pattern))
+    ;; Reset available labels on each update (like flash.nvim's reset)
+    ;; but keep used-labels to maintain stable labels
+    (let ((filtered-labels (flash-emacs-search--filter-labels flash-emacs-labels pattern)))
+      (setq flash-emacs-search--available-labels
+            (mapcar #'char-to-string (string-to-list filtered-labels))))
+    ;; Find visible matches and assign labels
     (let* ((win (or (minibuffer-selected-window) (selected-window)))
-           (win-start (window-start win))
-           (win-end (window-end win t)))
-      (dolist (match flash-emacs-search--all-matches)
-        (let ((pos (plist-get match :pos))
-              (label (plist-get match :label)))
-          ;; Only show labels for visible matches
-          (when (and label
-                     (>= pos win-start)
-                     (<= pos win-end))
+           (matches (flash-emacs-search--find-visible-matches pattern))
+           (labeled (flash-emacs-search--assign-labels matches pattern)))
+      (setq flash-emacs-search--all-matches labeled)
+      ;; Create overlays for all labeled matches
+      (dolist (match labeled)
+        (let ((label (plist-get match :label)))
+          (when label
             (let ((ov (flash-emacs-search--create-label-overlay
                        (plist-get match :end-pos)
                        label
@@ -258,10 +288,23 @@ Uses pre-computed labels from `flash-emacs-search--all-matches`."
 ;;; Jump handling
 
 (defun flash-emacs-search--find-match-by-label (label)
-  "Find match with LABEL in all matches."
-  (cl-find label flash-emacs-search--all-matches
-           :key (lambda (m) (plist-get m :label))
-           :test #'string=))
+  "Find match with LABEL in visible matches or used-labels table."
+  ;; First check visible matches
+  (or (cl-find label flash-emacs-search--all-matches
+               :key (lambda (m) (plist-get m :label))
+               :test #'string=)
+      ;; If not visible, search used-labels for this label
+      (when flash-emacs-search--used-labels
+        (let ((pos nil))
+          (maphash (lambda (k v) (when (string= v label) (setq pos k)))
+                   flash-emacs-search--used-labels)
+          (when pos
+            (let ((win (or (minibuffer-selected-window) (selected-window))))
+              (list :pos pos
+                    :end-pos (+ pos (length flash-emacs-search--current-pattern))
+                    :window win
+                    :buffer (window-buffer win)
+                    :label label)))))))
 
 (defun flash-emacs-search--jump-to-match (match)
   "Jump to MATCH and exit search."
@@ -283,7 +326,7 @@ Uses pre-computed labels from `flash-emacs-search--all-matches`."
 (defun flash-emacs-search--pre-command ()
   "Intercept label key presses before they're processed."
   (when (and flash-emacs-search--active
-             flash-emacs-search--matches
+             flash-emacs-search--all-matches
              (minibufferp))
     (let* ((keys (this-command-keys-vector))
            (key (and (= (length keys) 1) (aref keys 0)))
@@ -304,89 +347,72 @@ Uses pre-computed labels from `flash-emacs-search--all-matches`."
   (if flash-emacs-search--active
       (progn
         (let ((pattern (minibuffer-contents-no-properties)))
-          (flash-emacs-search--compute-labels pattern)
-          (flash-emacs-search--display-visible-labels))
+          (flash-emacs-search--show-labels pattern))
         (message "Flash search: ON"))
     (flash-emacs-search--clear-all)
     (message "Flash search: OFF")))
 
 ;;; Evil search integration
 
-(defun flash-emacs-search--refresh-display ()
-  "Refresh display of visible labels (without recomputing)."
-  (when flash-emacs-search--active
-    (flash-emacs-search--display-visible-labels)))
+(defun flash-emacs-search--update-labels ()
+  "Update labels based on current search pattern."
+  (when (and flash-emacs-search--active
+             (active-minibuffer-window))
+    (let ((pattern (with-current-buffer (window-buffer (active-minibuffer-window))
+                     (minibuffer-contents-no-properties))))
+      (flash-emacs-search--show-labels pattern))))
+
+(defun flash-emacs-search--refresh-labels ()
+  "Refresh labels for visible area.
+Labels are stable due to used-labels table (flash.nvim's label reuse mechanism)."
+  (when (and flash-emacs-search--active
+             flash-emacs-search--current-pattern)
+    (flash-emacs-search--show-labels flash-emacs-search--current-pattern)))
 
 (defun flash-emacs-search--after-change (&rest _)
-  "Recompute labels when search pattern changes."
+  "Update labels when search pattern changes."
   (when flash-emacs-search--active
     ;; Use timer to avoid issues during minibuffer changes
-    (run-at-time 0 nil
-                 (lambda ()
-                   (when flash-emacs-search--active
-                     (let ((pattern (minibuffer-contents-no-properties)))
-                       ;; Only recompute if pattern actually changed
-                       (unless (equal pattern flash-emacs-search--current-pattern)
-                         (flash-emacs-search--compute-labels pattern)
-                         (flash-emacs-search--display-visible-labels))))))))
+    (run-at-time 0 nil #'flash-emacs-search--update-labels)))
 
 (defun flash-emacs-search--post-command ()
-  "Refresh visible labels after each command (handles scroll, etc)."
+  "Refresh labels only if visible area changed (like flash.nvim)."
   (when flash-emacs-search--active
-    ;; Just refresh display - don't recompute labels
-    (flash-emacs-search--refresh-display)))
+    (flash-emacs-search--refresh-labels)))
 
 (defvar flash-emacs-search--scroll-timer nil
   "Timer for debounced scroll updates.")
 
-(defun flash-emacs-search--advice-update (&rest _)
-  "Advice to refresh labels after Evil search updates."
-  (when flash-emacs-search--active
-    ;; Schedule refresh for next event loop iteration
-    (run-at-time 0 nil #'flash-emacs-search--refresh-display)))
-
 (defun flash-emacs-search--window-scroll (win _start)
-  "Refresh visible labels when window scrolls.
-WIN is the window that scrolled."
+  "Refresh visible labels when window scrolls."
   (when (and flash-emacs-search--active
              (active-minibuffer-window)
-             ;; Only react to main buffer windows, not minibuffer
              (not (minibufferp (window-buffer win))))
-    ;; Debounce rapid scroll events
     (when flash-emacs-search--scroll-timer
       (cancel-timer flash-emacs-search--scroll-timer))
     (setq flash-emacs-search--scroll-timer
-          (run-at-time 0.02 nil #'flash-emacs-search--refresh-display))))
+          (run-at-time 0.02 nil #'flash-emacs-search--refresh-if-needed))))
 
 (defun flash-emacs-search--setup ()
   "Set up flash search for Evil ex-search session."
   (when (and (boundp 'evil-ex-search-direction)
              flash-emacs-search-enabled)
-    (let ((win (minibuffer-selected-window)))
-      (setq flash-emacs-search--active t
-            flash-emacs-search--original-buffer (current-buffer)
-            flash-emacs-search--initial-point (and win (window-point win))))
+    (setq flash-emacs-search--active t
+          flash-emacs-search--original-buffer (current-buffer))
     (add-hook 'after-change-functions #'flash-emacs-search--after-change nil t)
     (add-hook 'pre-command-hook #'flash-emacs-search--pre-command nil t)
     (add-hook 'post-command-hook #'flash-emacs-search--post-command nil t)
-    ;; Hook window scroll for immediate updates on wrap/scroll
-    (add-hook 'window-scroll-functions #'flash-emacs-search--window-scroll)
-    ;; Advice Evil's search update for immediate label refresh on wrap
-    (when (fboundp 'evil-ex-search-update-pattern)
-      (advice-add 'evil-ex-search-update-pattern :after #'flash-emacs-search--advice-update))))
+    (add-hook 'window-scroll-functions #'flash-emacs-search--window-scroll)))
 
 (defun flash-emacs-search--cleanup ()
   "Clean up flash search after search ends."
   (flash-emacs-search--clear-all)
   (setq flash-emacs-search--active nil
-        flash-emacs-search--scroll-timer nil
-        flash-emacs-search--initial-point nil)
+        flash-emacs-search--scroll-timer nil)
   (remove-hook 'after-change-functions #'flash-emacs-search--after-change t)
   (remove-hook 'pre-command-hook #'flash-emacs-search--pre-command t)
   (remove-hook 'post-command-hook #'flash-emacs-search--post-command t)
-  (remove-hook 'window-scroll-functions #'flash-emacs-search--window-scroll)
-  (when (fboundp 'evil-ex-search-update-pattern)
-    (advice-remove 'evil-ex-search-update-pattern #'flash-emacs-search--advice-update)))
+  (remove-hook 'window-scroll-functions #'flash-emacs-search--window-scroll))
 
 ;;; Keymap for toggle key only
 
