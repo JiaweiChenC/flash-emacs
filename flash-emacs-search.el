@@ -215,33 +215,31 @@ Since search wraps around, we need to check the whole buffer, not just visible."
           (mapcar #'char-to-string (string-to-list filtered-labels)))))
 
 (defun flash-emacs-search--assign-labels (matches pattern)
-  "Assign labels to MATCHES using flash.nvim's two-pass approach.
+  "Assign labels to MATCHES sorted by distance from cursor.
 
-Pass 1: Reuse previously assigned labels from `used-labels` table.
-Pass 2: Assign new labels from `available-labels` for remaining matches.
-
-Labels persist in `used-labels` so same positions get same labels across scrolls."
+Like flash.nvim: closest matches to cursor get labels first.
+The `used-labels` table provides stability when PATTERN changes (typing more
+characters), but on cursor movement, labels are redistributed to the closest
+matches."
   (let* ((current-window (or (minibuffer-selected-window) (selected-window)))
          (current-point (with-selected-window current-window (point)))
          (sorted-matches (flash-emacs--sort-matches matches current-point current-window)))
-    ;; Pass 1: Reuse existing labels from used-labels table
+    ;; Assign labels to closest matches first
     (dolist (match sorted-matches)
-      (let* ((pos (plist-get match :pos))
-             (existing-label (gethash pos flash-emacs-search--used-labels)))
-        (when (and existing-label
-                   (member existing-label flash-emacs-search--available-labels))
-          ;; Reuse the label and remove from available
-          (plist-put match :label existing-label)
-          (setq flash-emacs-search--available-labels
-                (delete existing-label flash-emacs-search--available-labels)))))
-    ;; Pass 2: Assign new labels to matches without labels
-    (dolist (match sorted-matches)
-      (unless (plist-get match :label)
-        (when flash-emacs-search--available-labels
-          (let ((new-label (pop flash-emacs-search--available-labels)))
-            (plist-put match :label new-label)
-            ;; Remember this label for this position
-            (puthash (plist-get match :pos) new-label flash-emacs-search--used-labels)))))
+      (when flash-emacs-search--available-labels
+        (let* ((pos (plist-get match :pos))
+               ;; Try to reuse existing label if available (for pattern stability)
+               (existing-label (gethash pos flash-emacs-search--used-labels))
+               (label (if (and existing-label
+                               (member existing-label flash-emacs-search--available-labels))
+                          existing-label
+                        (car flash-emacs-search--available-labels))))
+          (when label
+            (plist-put match :label label)
+            (setq flash-emacs-search--available-labels
+                  (delete label flash-emacs-search--available-labels))
+            ;; Remember for pattern stability
+            (puthash pos label flash-emacs-search--used-labels)))))
     ;; Return only matches that got labels
     (cl-remove-if-not (lambda (m) (plist-get m :label)) sorted-matches)))
 
@@ -376,7 +374,8 @@ Labels are stable due to used-labels table (flash.nvim's label reuse mechanism).
     (run-at-time 0 nil #'flash-emacs-search--update-labels)))
 
 (defun flash-emacs-search--post-command ()
-  "Refresh labels only if visible area changed (like flash.nvim)."
+  "Refresh labels after each command.
+Like flash.nvim, labels are re-sorted by distance from current cursor."
   (when flash-emacs-search--active
     (flash-emacs-search--refresh-labels)))
 
@@ -391,7 +390,7 @@ Labels are stable due to used-labels table (flash.nvim's label reuse mechanism).
     (when flash-emacs-search--scroll-timer
       (cancel-timer flash-emacs-search--scroll-timer))
     (setq flash-emacs-search--scroll-timer
-          (run-at-time 0.02 nil #'flash-emacs-search--refresh-if-needed))))
+          (run-at-time 0.02 nil #'flash-emacs-search--refresh-labels))))
 
 (defun flash-emacs-search--setup ()
   "Set up flash search for Evil ex-search session."
