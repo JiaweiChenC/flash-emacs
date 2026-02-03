@@ -100,7 +100,8 @@
   (setq flash-emacs-search--all-matches nil
         flash-emacs-search--current-pattern nil
         flash-emacs-search--used-labels nil
-        flash-emacs-search--available-labels nil))
+        flash-emacs-search--available-labels nil
+        flash-emacs-search--conflict-cache nil))
 
 (defun flash-emacs-search--create-label-overlay (end-pos label win)
   "Create a label overlay at END-POS (after match) with LABEL in window WIN.
@@ -167,27 +168,50 @@ PATTERN is treated as a literal string for searching."
 
 ;;; Label assignment
 
+(defvar flash-emacs-search--conflict-cache nil
+  "Cache for conflict detection: (pattern . conflicts).")
+
 (defun flash-emacs-search--find-buffer-conflicts (pattern labels)
-  "Find labels that conflict with PATTERN continuation in the entire buffer.
-Since search wraps around, we need to check the whole buffer, not just visible."
-  (when (and pattern (> (length pattern) 0))
-    (let* ((search-regexp (concat (regexp-quote pattern) "."))
-           (case-fold-search (flash-emacs--should-ignore-case pattern))
-           (conflicts '()))
-      ;; Check in all non-minibuffer windows' buffers
-      (dolist (win (flash-emacs-search--get-windows))
-        (with-current-buffer (window-buffer win)
-          (save-excursion
-            (goto-char (point-min))
-            (while (re-search-forward search-regexp nil t)
-              (let ((following-char (buffer-substring-no-properties
-                                     (1- (match-end 0)) (match-end 0))))
-                (dolist (label labels)
-                  (when (if case-fold-search
-                            (string= (downcase following-char) (downcase label))
-                          (string= following-char label))
-                    (push label conflicts))))))))
-      (delete-dups conflicts))))
+  "Find labels that conflict with PATTERN continuation.
+Uses flash.nvim's optimized approach: single regex with character class.
+Results are cached per pattern."
+  (when (and pattern (> (length pattern) 0) labels)
+    ;; Check cache first
+    (if (and flash-emacs-search--conflict-cache
+             (equal (car flash-emacs-search--conflict-cache) pattern))
+        (cdr flash-emacs-search--conflict-cache)
+      ;; Compute conflicts using flash.nvim's approach
+      (let* ((case-fold-search (flash-emacs--should-ignore-case pattern))
+             (remaining-labels (copy-sequence labels))
+             (conflicts '())
+             (win (car (flash-emacs-search--get-windows))))
+        (when win
+          (with-current-buffer (window-buffer win)
+            (save-excursion
+              (while remaining-labels
+                ;; Build regex: pattern + [remaining_labels]
+                (let* ((label-chars (mapconcat #'identity remaining-labels ""))
+                       (search-regexp (concat (regexp-quote pattern)
+                                              "[" (regexp-quote label-chars) "]")))
+                  (goto-char (point-min))
+                  (if (re-search-forward search-regexp nil t)
+                      ;; Found a conflict - get the conflicting char
+                      (let ((conflict-char (buffer-substring-no-properties
+                                            (1- (match-end 0)) (match-end 0))))
+                        ;; Remove from remaining (case-insensitive if needed)
+                        (setq remaining-labels
+                              (cl-remove-if
+                               (lambda (l)
+                                 (if case-fold-search
+                                     (string= (downcase l) (downcase conflict-char))
+                                   (string= l conflict-char)))
+                               remaining-labels))
+                        (push conflict-char conflicts))
+                    ;; No more conflicts found
+                    (setq remaining-labels nil)))))))
+        ;; Cache and return
+        (setq flash-emacs-search--conflict-cache (cons pattern conflicts))
+        conflicts))))
 
 (defun flash-emacs-search--filter-labels (labels pattern)
   "Filter LABELS to remove those conflicting with PATTERN in entire buffer."
@@ -373,11 +397,18 @@ Labels are stable due to used-labels table (flash.nvim's label reuse mechanism).
     ;; Use timer to avoid issues during minibuffer changes
     (run-at-time 0 nil #'flash-emacs-search--update-labels)))
 
+(defvar flash-emacs-search--refresh-timer nil
+  "Timer for debounced label refresh.")
+
 (defun flash-emacs-search--post-command ()
-  "Refresh labels after each command.
+  "Refresh labels after each command (debounced).
 Like flash.nvim, labels are re-sorted by distance from current cursor."
   (when flash-emacs-search--active
-    (flash-emacs-search--refresh-labels)))
+    ;; Debounce to avoid excessive refreshes during rapid commands
+    (when flash-emacs-search--refresh-timer
+      (cancel-timer flash-emacs-search--refresh-timer))
+    (setq flash-emacs-search--refresh-timer
+          (run-at-time 0.01 nil #'flash-emacs-search--refresh-labels))))
 
 (defvar flash-emacs-search--scroll-timer nil
   "Timer for debounced scroll updates.")
@@ -390,7 +421,7 @@ Like flash.nvim, labels are re-sorted by distance from current cursor."
     (when flash-emacs-search--scroll-timer
       (cancel-timer flash-emacs-search--scroll-timer))
     (setq flash-emacs-search--scroll-timer
-          (run-at-time 0.02 nil #'flash-emacs-search--refresh-labels))))
+          (run-at-time 0 nil #'flash-emacs-search--refresh-labels))))
 
 (defun flash-emacs-search--setup ()
   "Set up flash search for Evil ex-search session."
@@ -406,8 +437,13 @@ Like flash.nvim, labels are re-sorted by distance from current cursor."
 (defun flash-emacs-search--cleanup ()
   "Clean up flash search after search ends."
   (flash-emacs-search--clear-all)
+  (when flash-emacs-search--refresh-timer
+    (cancel-timer flash-emacs-search--refresh-timer))
+  (when flash-emacs-search--scroll-timer
+    (cancel-timer flash-emacs-search--scroll-timer))
   (setq flash-emacs-search--active nil
-        flash-emacs-search--scroll-timer nil)
+        flash-emacs-search--scroll-timer nil
+        flash-emacs-search--refresh-timer nil)
   (remove-hook 'after-change-functions #'flash-emacs-search--after-change t)
   (remove-hook 'pre-command-hook #'flash-emacs-search--pre-command t)
   (remove-hook 'post-command-hook #'flash-emacs-search--post-command t)
