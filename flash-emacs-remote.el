@@ -58,6 +58,7 @@
 (defvar evil-normal-state-map)
 (declare-function evil-yank "evil-commands")
 (declare-function evil-define-motion "evil-macros")
+(declare-function evil-normal-state "evil-states")
 
 ;;; Internal state
 
@@ -113,6 +114,32 @@ For change operator, waits until exiting insert mode."
 (with-eval-after-load 'evil
   (require 'evil-macros)
   
+  ;; Map operator functions to their keys (more reliable than where-is-internal)
+  (defvar flash-emacs-remote--operator-keys
+    '((evil-delete . "d")
+      (evil-yank . "y")
+      (evil-change . "c")
+      (evil-delete-char . "x")
+      (evil-indent . "=")
+      (evil-shift-left . "<")
+      (evil-shift-right . ">")
+      (evil-fill-and-move . "gq")
+      (evil-join-whitespace . "gJ")
+      ;; evil-org variants (same keys as standard operators)
+      (evil-org-delete . "d")
+      (evil-org-yank . "y")
+      (evil-org-change . "c")
+      (evil-org-< . "<")
+      (evil-org-> . ">"))
+    "Mapping of operator functions to their key sequences.")
+  
+  (defun flash-emacs-remote--get-operator-key (op)
+    "Get the key sequence for operator OP."
+    (or (cdr (assq op flash-emacs-remote--operator-keys))
+        ;; Fallback to where-is-internal
+        (let ((key (car (where-is-internal op evil-normal-state-map))))
+          (when key (key-description key)))))
+  
   ;; The trick: we define a motion that:
   ;; 1. Saves state
   ;; 2. Does flash jump (moves cursor)
@@ -120,12 +147,12 @@ For change operator, waits until exiting insert mode."
   ;; 4. Aborts current operator
   ;; 5. Re-invokes operator at new location
   ;;
-  ;; This way, after `ys`, we're at the target and Evil is waiting
-  ;; for a motion for `y` again.
+  ;; This way, after `dr`, we're at the target and Evil is waiting
+  ;; for a motion for `d` again.
   
   (evil-define-motion flash-emacs-remote-motion (count)
     "Jump to remote location and re-enter operator-pending mode.
-Use as: ys<search><label>iw to yank inner word at target."
+Use as: dr<search><label>iw to delete inner word at target."
     :type inclusive
     :jump t
     (interactive "<c>")
@@ -146,25 +173,34 @@ Use as: ys<search><label>iw to yank inner word at target."
             target-win (selected-window)
             target-buf (current-buffer))
       ;; Move back to start so Evil sees zero-width range (no-op)
-      (select-window start-win)
-      (switch-to-buffer start-buf)
-      (goto-char start-pos)
+      (when (window-live-p start-win)
+        (select-window start-win))
+      (when (buffer-live-p start-buf)
+        (set-buffer start-buf)
+        (goto-char start-pos))
       ;; Schedule the actual remote operation
       (when op
-        (let ((op-key (car (where-is-internal op evil-normal-state-map))))
+        (let ((op-key (flash-emacs-remote--get-operator-key op)))
           (when op-key
             (run-at-time 0 nil
               (lambda ()
                 ;; Go to target
-                (select-window target-win)
-                (switch-to-buffer target-buf)
-                (goto-char target-pos)
-                ;; Set up restoration hook
-                (when flash-emacs-remote-restore
-                  (flash-emacs-remote--start-waiting))
-                ;; Simulate pressing the operator key
-                (setq unread-command-events
-                      (listify-key-sequence op-key)))))))))
+                (when (and (window-live-p target-win) (buffer-live-p target-buf))
+                  (select-window target-win)
+                  ;; Ensure buffer is displayed in window
+                  (unless (eq (window-buffer target-win) target-buf)
+                    (set-window-buffer target-win target-buf))
+                  (goto-char target-pos)
+                  ;; Ensure we're in normal state before invoking operator
+                  (when (and (boundp 'evil-state)
+                             (not (eq evil-state 'normal)))
+                    (evil-normal-state))
+                  ;; Set up restoration hook
+                  (when flash-emacs-remote-restore
+                    (flash-emacs-remote--start-waiting))
+                  ;; Simulate pressing the operator key
+                  (setq unread-command-events
+                        (listify-key-sequence (kbd op-key)))))))))))
 
   ;; Bind in operator-pending mode
   (define-key evil-operator-state-map
