@@ -103,30 +103,40 @@
         flash-emacs-search--available-labels nil
         flash-emacs-search--conflict-cache nil))
 
+(defun flash-emacs-search--in-image-overlay-p (pos)
+  "Check if POS is inside an org image overlay (including sliced images).
+This prevents flash labels from disrupting image display."
+  (cl-some (lambda (ov)
+             (overlay-get ov 'org-image-overlay))
+           (overlays-at pos)))
+
 (defun flash-emacs-search--create-label-overlay (end-pos label win)
   "Create a label overlay at END-POS (after match) with LABEL in window WIN.
-Uses replace style - the label replaces the character after the match."
+Uses replace style - the label replaces the character after the match.
+Returns nil if position is inside an org image overlay."
   (with-selected-window win
-    (let* ((label-str (propertize label 'face 'flash-emacs-label))
-           (char-at-pos (char-after end-pos))
-           (at-newline-or-eob (or (null char-at-pos) (= char-at-pos ?\n)))
-           (ov (if at-newline-or-eob
-                   ;; At newline or end of buffer, use after-string with high priority
-                   ;; This ensures flash labels appear BEFORE other after-string overlays
-                   ;; (like search count overlays) due to higher priority
-                   (let ((o (make-overlay end-pos end-pos)))
-                     (overlay-put o 'after-string label-str)
-                     o)
-                 ;; Replace the character after the match
-                 (let ((o (make-overlay end-pos (1+ end-pos))))
-                   (overlay-put o 'display label-str)
-                   o))))
-      (overlay-put ov 'flash-emacs-search t)
-      ;; Very high priority so flash labels appear before other overlays
-      ;; at same position (like search count [x/y] overlays)
-      (overlay-put ov 'priority 20000)
-      (overlay-put ov 'window win)
-      ov)))
+    ;; Skip if inside an org image overlay (e.g., org-sliced-images)
+    (unless (flash-emacs-search--in-image-overlay-p end-pos)
+      (let* ((label-str (propertize label 'face 'flash-emacs-label))
+             (char-at-pos (char-after end-pos))
+             (at-newline-or-eob (or (null char-at-pos) (= char-at-pos ?\n)))
+             (ov (if at-newline-or-eob
+                     ;; At newline or end of buffer, use after-string with high priority
+                     ;; This ensures flash labels appear BEFORE other after-string overlays
+                     ;; (like search count overlays) due to higher priority
+                     (let ((o (make-overlay end-pos end-pos)))
+                       (overlay-put o 'after-string label-str)
+                       o)
+                   ;; Replace the character after the match
+                   (let ((o (make-overlay end-pos (1+ end-pos))))
+                     (overlay-put o 'display label-str)
+                     o))))
+        (overlay-put ov 'flash-emacs-search t)
+        ;; Very high priority so flash labels appear before other overlays
+        ;; at same position (like search count [x/y] overlays)
+        (overlay-put ov 'priority 20000)
+        (overlay-put ov 'window win)
+        ov))))
 
 ;;; Window helpers
 
