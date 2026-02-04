@@ -82,10 +82,14 @@
               (pt (nth 1 state))
               (ws (nth 2 state))
               (buf (nth 3 state)))
-    (when (and (window-live-p win) (buffer-live-p buf))
-      (select-window win)
-      (set-window-start win ws)
-      (switch-to-buffer buf)
+    (when (buffer-live-p buf)
+      ;; Only switch window/buffer if we're in a different buffer
+      (unless (eq buf (current-buffer))
+        (when (window-live-p win)
+          (select-window win)
+          (set-window-start win ws))
+        (unless (eq (current-buffer) buf)
+          (set-window-buffer (selected-window) buf)))
       (goto-char pt)))
   (setq flash-emacs-remote--saved-state nil
         flash-emacs-remote--waiting nil))
@@ -123,6 +127,13 @@ For change operator, waits until exiting insert mode."
       (evil-indent . "=")
       (evil-shift-left . "<")
       (evil-shift-right . ">")
+      ;; Multi-key operators
+      (evil-upcase . "gU")
+      (evil-downcase . "gu")
+      (evil-invert-char . "g~")
+      (evil-invert-case . "g~")
+      (evil-rot13 . "g?")
+      (evil-fill . "gw")
       (evil-fill-and-move . "gq")
       (evil-join-whitespace . "gJ")
       ;; evil-org variants (same keys as standard operators)
@@ -140,15 +151,36 @@ For change operator, waits until exiting insert mode."
         (let ((key (car (where-is-internal op evil-normal-state-map))))
           (when key (key-description key)))))
   
-  ;; The trick: we define a motion that:
-  ;; 1. Saves state
-  ;; 2. Does flash jump (moves cursor)
-  ;; 3. Captures operator
-  ;; 4. Aborts current operator
-  ;; 5. Re-invokes operator at new location
-  ;;
-  ;; This way, after `dr`, we're at the target and Evil is waiting
-  ;; for a motion for `d` again.
+  (defun flash-emacs-remote--execute-at-target (op op-key target-pos target-win target-buf)
+    "Execute operator OP with OP-KEY at TARGET-POS in TARGET-WIN/TARGET-BUF."
+    (when (buffer-live-p target-buf)
+      ;; Only switch window/buffer if target is in a different buffer
+      (let ((same-buffer-p (eq target-buf (current-buffer))))
+        (unless same-buffer-p
+          (when (window-live-p target-win)
+            (select-window target-win))
+          (unless (eq (current-buffer) target-buf)
+            (set-window-buffer (selected-window) target-buf))))
+      (goto-char target-pos)
+      ;; Ensure we're in normal state first
+      (when (and (boundp 'evil-state) (not (eq evil-state 'normal)))
+        (evil-normal-state))
+      ;; Set up restoration hook
+      (when flash-emacs-remote-restore
+        (flash-emacs-remote--start-waiting))
+      ;; For multi-key operators (like gU), temporarily bind to a single key
+      ;; then use that key via unread-command-events
+      (if (> (length op-key) 1)
+          ;; Multi-key operator: temporarily bind to F13 (unlikely to be used)
+          (let ((temp-key [f13]))
+            (define-key evil-normal-state-map temp-key op)
+            (setq unread-command-events (listify-key-sequence temp-key))
+            ;; Schedule cleanup of the temporary binding
+            (run-at-time 0.5 nil
+                         (lambda ()
+                           (define-key evil-normal-state-map temp-key nil))))
+        ;; Single-key operator: use unread-command-events directly
+        (setq unread-command-events (listify-key-sequence (kbd op-key))))))
   
   (evil-define-motion flash-emacs-remote-motion (count)
     "Jump to remote location and re-enter operator-pending mode.
@@ -183,24 +215,8 @@ Use as: dr<search><label>iw to delete inner word at target."
         (let ((op-key (flash-emacs-remote--get-operator-key op)))
           (when op-key
             (run-at-time 0 nil
-              (lambda ()
-                ;; Go to target
-                (when (and (window-live-p target-win) (buffer-live-p target-buf))
-                  (select-window target-win)
-                  ;; Ensure buffer is displayed in window
-                  (unless (eq (window-buffer target-win) target-buf)
-                    (set-window-buffer target-win target-buf))
-                  (goto-char target-pos)
-                  ;; Ensure we're in normal state before invoking operator
-                  (when (and (boundp 'evil-state)
-                             (not (eq evil-state 'normal)))
-                    (evil-normal-state))
-                  ;; Set up restoration hook
-                  (when flash-emacs-remote-restore
-                    (flash-emacs-remote--start-waiting))
-                  ;; Simulate pressing the operator key
-                  (setq unread-command-events
-                        (listify-key-sequence (kbd op-key)))))))))))
+                         #'flash-emacs-remote--execute-at-target
+                         op op-key target-pos target-win target-buf))))))
 
   ;; Bind in operator-pending mode
   (define-key evil-operator-state-map
