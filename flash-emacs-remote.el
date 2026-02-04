@@ -56,6 +56,7 @@
 (defvar evil-operator-state-map)
 (defvar evil-motion-state-map)
 (defvar evil-normal-state-map)
+(defvar flash-emacs--remote-operation)
 (declare-function evil-yank "evil-commands")
 (declare-function evil-define-motion "evil-macros")
 (declare-function evil-normal-state "evil-states")
@@ -199,7 +200,9 @@ Use as: dr<search><label>iw to delete inner word at target."
       ;; Abort current operator
       (setq evil-inhibit-operator t)
       ;; Do the flash jump - this moves cursor to target
-      (flash-emacs-jump)
+      ;; Set remote operation flag to skip the +1 position adjustment
+      (let ((flash-emacs--remote-operation t))
+        (flash-emacs-jump))
       ;; Capture target position
       (setq target-pos (point)
             target-win (selected-window)

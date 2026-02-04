@@ -177,6 +177,10 @@ static char * flash[] = {
 (defvar flash-emacs--current-pattern nil
   "Current search pattern for tracking pattern changes.")
 
+(defvar flash-emacs--remote-operation nil
+  "Non-nil when flash jump is being used for a remote operation.
+When set, the +1 position adjustment for forward operator jumps is skipped.")
+
 ;;; Utility functions
 
 (defun flash-emacs--get-windows ()
@@ -588,7 +592,10 @@ text for the operator to act on."
      ((and operator-mode (not is-remote))
       (push-mark)
       (select-window target-window)
-      (when (and (> pos start-point) (< pos (point-max)))
+      ;; Add +1 for forward jumps to make the motion inclusive,
+      ;; but skip this for remote operations (they use text objects)
+      (when (and (not flash-emacs--remote-operation)
+                 (> pos start-point) (< pos (point-max)))
         (cl-incf pos))
       (goto-char pos))
      
