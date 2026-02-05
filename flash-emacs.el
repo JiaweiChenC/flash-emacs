@@ -577,16 +577,30 @@ text for the operator to act on."
          (start-point (point)))
     (cond
      ;; REMOTE OPERATOR mode: operator-pending + different window
+     ;; When flash-emacs--remote-operation is set, the caller (flash-emacs-remote.el)
+     ;; handles everything - just do a simple jump without auto-restoration
      ((and operator-mode is-remote)
-      (when flash-emacs-remote-restore
-        (flash-emacs--save-window-state))
-      (select-window target-window)
-      ;; Select the matched text for the operator to act on
-      (goto-char match-start)
-      (when (fboundp 'evil-visual-make-selection)
-        (evil-visual-make-selection match-start (1- match-end) 'char))
-      (when flash-emacs-remote-restore
-        (run-at-time 0.05 nil #'flash-emacs--restore-window-state)))
+      (message "flash-jump: REMOTE OPERATOR branch, flash-emacs--remote-operation=%S"
+               flash-emacs--remote-operation)
+      (if flash-emacs--remote-operation
+          ;; New approach: just jump, caller handles the rest
+          (progn
+            (message "flash-jump: using NEW approach, jumping to win=%S pos=%d"
+                     target-window pos)
+            (select-window target-window)
+            (goto-char pos)
+            (message "flash-jump: after jump, now at win=%S pos=%d"
+                     (selected-window) (point)))
+        ;; Old approach: auto-select and restore (kept for backward compatibility)
+        (message "flash-jump: using OLD approach with auto-restore")
+        (when flash-emacs-remote-restore
+          (flash-emacs--save-window-state))
+        (select-window target-window)
+        (goto-char match-start)
+        (when (fboundp 'evil-visual-make-selection)
+          (evil-visual-make-selection match-start (1- match-end) 'char))
+        (when flash-emacs-remote-restore
+          (run-at-time 0.05 nil #'flash-emacs--restore-window-state))))
      
      ;; LOCAL OPERATOR mode: operator-pending in same window
      ((and operator-mode (not is-remote))

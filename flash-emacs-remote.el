@@ -288,6 +288,16 @@ Returns t if the operator enters insert mode (change), nil otherwise."
            (message "flash-remote: error applying %S: %S" op err))))
       enters-insert))
   
+  (defun flash-emacs-remote--log-position (tag)
+    "Log current position with TAG for debugging."
+    (when flash-emacs-remote--debug
+      (message "flash-remote [%s]: win=%S buf=%S pos=%d state=%S"
+               tag
+               (selected-window)
+               (buffer-name)
+               (point)
+               (and (boundp 'evil-state) evil-state))))
+  
   (evil-define-motion flash-emacs-remote-motion (count)
     "Jump to remote location, read text object, apply operator.
 Use as: yr<search><label>iw - yank inner word at target.
@@ -303,36 +313,51 @@ This bypasses Evil's operator state machine entirely:
     (interactive "<c>")
     (let ((op evil-this-operator)
           (register evil-this-register)
+          (start-win (selected-window))
+          (start-buf (current-buffer))
+          (start-pos (point))
           target-pos target-win target-buf)
+      (flash-emacs-remote--log-position "motion-start")
       ;; Save state for restoration
       (when flash-emacs-remote-restore
         (flash-emacs-remote--save-state))
       ;; Abort this operator - we handle everything ourselves
       (setq evil-inhibit-operator t)
+      (flash-emacs-remote--log-position "before-flash-jump")
       ;; Flash jump to target
       (let ((flash-emacs--remote-operation t))
         (flash-emacs-jump))
+      (flash-emacs-remote--log-position "after-flash-jump")
       ;; Capture target
       (setq target-pos (point)
             target-win (selected-window)
             target-buf (current-buffer))
       (when flash-emacs-remote--debug
-        (message "flash-remote: at target pos=%d win=%S buf=%S op=%S"
-                 target-pos target-win target-buf op))
+        (message "flash-remote: target captured: win=%S buf=%S pos=%d op=%S"
+                 target-win (buffer-name target-buf) target-pos op))
+      ;; Check if we actually moved to a different window
+      (when (and flash-emacs-remote--debug (eq target-win start-win))
+        (message "flash-remote: WARNING - still in same window!"))
       ;; Now read text object/motion and apply operator
       (let ((enters-insert nil))
         (when op
+          (flash-emacs-remote--log-position "before-read-textobj")
           (let ((range (flash-emacs-remote--read-text-object-or-motion)))
+            (flash-emacs-remote--log-position "after-read-textobj")
             (when range
               (when flash-emacs-remote--debug
                 (message "flash-remote: got range=%S" range))
+              (flash-emacs-remote--log-position "before-apply-op")
               (setq enters-insert
-                    (flash-emacs-remote--apply-operator op range register)))))
+                    (flash-emacs-remote--apply-operator op range register))
+              (flash-emacs-remote--log-position "after-apply-op"))))
         ;; Restore position unless operator entered insert mode
         ;; (change operator sets up its own hook for restoration)
         (when (and flash-emacs-remote-restore
                    (not enters-insert))
-          (flash-emacs-remote--restore-state)))))
+          (flash-emacs-remote--log-position "before-restore")
+          (flash-emacs-remote--restore-state)
+          (flash-emacs-remote--log-position "after-restore")))))
 
   ;; Bind in operator-pending mode
   (define-key evil-operator-state-map
