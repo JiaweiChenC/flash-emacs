@@ -580,19 +580,12 @@ text for the operator to act on."
      ;; When flash-emacs--remote-operation is set, the caller (flash-emacs-remote.el)
      ;; handles everything - just do a simple jump without auto-restoration
      ((and operator-mode is-remote)
-      (message "flash-jump: REMOTE OPERATOR branch, flash-emacs--remote-operation=%S"
-               flash-emacs--remote-operation)
       (if flash-emacs--remote-operation
           ;; New approach: just jump, caller handles the rest
           (progn
-            (message "flash-jump: using NEW approach, jumping to win=%S pos=%d"
-                     target-window pos)
             (select-window target-window)
-            (goto-char pos)
-            (message "flash-jump: after jump, now at win=%S pos=%d"
-                     (selected-window) (point)))
+            (goto-char pos))
         ;; Old approach: auto-select and restore (kept for backward compatibility)
-        (message "flash-jump: using OLD approach with auto-restore")
         (when flash-emacs-remote-restore
           (flash-emacs--save-window-state))
         (select-window target-window)
