@@ -85,29 +85,122 @@
 (defvar flash-emacs-remote--waiting nil
   "Non-nil when waiting for second operator to complete.")
 
+(defvar flash-emacs-remote--change-group-handle nil
+  "Handle for undo change group during change operations.")
+
+(defvar flash-emacs-remote--undo-restore-info nil
+  "Info for restoring position after undo: (original-window original-marker).
+Uses a marker so position adjusts when undo changes buffer content.
+Set after a remote operation, cleared on non-undo commands.")
+
 ;;; State management
 
 (defun flash-emacs-remote--save-state ()
-  "Save current state for later restoration."
-  (setq flash-emacs-remote--saved-state
-        (list (selected-window) (point) (window-start) (current-buffer))))
+  "Save current state for later restoration.
+Uses a marker for position so it adjusts when buffer content changes."
+  (let ((marker (point-marker)))
+    (setq flash-emacs-remote--saved-state
+          (list (selected-window) marker (window-start) (current-buffer)))
+    (flash-emacs-remote--log "SAVED state: win=%S pos=%d (marker) buf=%s" 
+                             (selected-window) (marker-position marker) (buffer-name))))
 
 (defun flash-emacs-remote--restore-state ()
-  "Restore saved state."
+  "Restore saved state and set up undo restoration."
+  (flash-emacs-remote--log "restore-state called, saved-state=%S" flash-emacs-remote--saved-state)
+  (flash-emacs-remote--log-state "restore-state-START")
   (when-let* ((state flash-emacs-remote--saved-state)
               (win (nth 0 state))
-              (pt (nth 1 state))
+              (pt-or-marker (nth 1 state))
               (ws (nth 2 state))
               (buf (nth 3 state)))
-    ;; Always restore to the saved window
-    (when (and (window-live-p win) (buffer-live-p buf))
-      (select-window win)
-      (set-window-start win ws t)
-      (unless (eq (window-buffer win) buf)
-        (set-window-buffer win buf))
-      (goto-char pt)))
+    ;; Get position from marker or use directly if number
+    (let ((pt (if (markerp pt-or-marker)
+                  (marker-position pt-or-marker)
+                pt-or-marker)))
+      ;; Clean up old undo marker if exists
+      (when (and flash-emacs-remote--undo-restore-info
+                 (markerp (nth 1 flash-emacs-remote--undo-restore-info)))
+        (set-marker (nth 1 flash-emacs-remote--undo-restore-info) nil))
+      ;; Save info for undo restoration using a NEW marker in the target buffer
+      ;; The marker is set at current point (where we are now, in target buffer)
+      ;; but we want to restore to 'pt' in the original buffer
+      ;; So we create a marker in the original buffer at 'pt'
+      (when (and (buffer-live-p buf) pt)
+        (let ((undo-marker (with-current-buffer buf
+                             (save-excursion
+                               (goto-char pt)
+                               (point-marker)))))
+          (setq flash-emacs-remote--undo-restore-info (list win undo-marker))
+          (flash-emacs-remote--log "Set undo-restore-info to (%S marker@%d)" win pt)))
+      ;; Clean up saved-state marker
+      (when (markerp pt-or-marker)
+        (set-marker pt-or-marker nil))
+      ;; Always restore to the saved window
+      (when (and (window-live-p win) (buffer-live-p buf) pt)
+        (select-window win)
+        (set-window-start win ws t)
+        (unless (eq (window-buffer win) buf)
+          (set-window-buffer win buf))
+        (goto-char pt)
+        (flash-emacs-remote--log-state "restore-state-DONE"))))
   (setq flash-emacs-remote--saved-state nil
         flash-emacs-remote--waiting nil))
+
+;;; Undo advice to restore position
+
+(defvar flash-emacs-remote--debug-log nil
+  "List of debug log entries.")
+
+(defun flash-emacs-remote--log (fmt &rest args)
+  "Add a log entry."
+  ;; (let ((entry (apply #'format fmt args)))
+  ;;   (push entry flash-emacs-remote--debug-log)
+  ;;   (message "FLASH-LOG: %s" entry))
+  )
+
+(defun flash-emacs-remote--log-state (tag)
+  "Log current state with TAG."
+  ;; (flash-emacs-remote--log "[%s] point=%d buf=%s win=%S undo-info=%S undo-list-len=%d"
+  ;;                          tag
+  ;;                          (point)
+  ;;                          (buffer-name)
+  ;;                          (selected-window)
+  ;;                          flash-emacs-remote--undo-restore-info
+  ;;                          (if (listp buffer-undo-list)
+  ;;                              (length (seq-take buffer-undo-list 50))
+  ;;                            -1))
+  )
+
+(defun flash-emacs-remote--after-undo (&rest _)
+  "Restore original position after undoing a remote operation."
+  (when flash-emacs-remote--undo-restore-info
+    (let* ((orig-win (nth 0 flash-emacs-remote--undo-restore-info))
+           (pos-or-marker (nth 1 flash-emacs-remote--undo-restore-info))
+           (orig-pos (if (markerp pos-or-marker)
+                         (marker-position pos-or-marker)
+                       pos-or-marker)))
+      (when (and (window-live-p orig-win) orig-pos)
+        (select-window orig-win)
+        (goto-char orig-pos)))))
+
+;; Clear undo-restore-info when any non-undo command is executed
+(defun flash-emacs-remote--clear-undo-info ()
+  "Clear undo restore info on non-undo commands."
+  (when (and flash-emacs-remote--undo-restore-info
+             (not (memq this-command '(evil-undo undo undo-tree-undo undo-only
+                                       undo-fu-only-undo undo-fu-only-redo))))
+    ;; Clean up marker
+    (when (markerp (nth 1 flash-emacs-remote--undo-restore-info))
+      (set-marker (nth 1 flash-emacs-remote--undo-restore-info) nil))
+    (setq flash-emacs-remote--undo-restore-info nil)))
+
+(with-eval-after-load 'evil
+  (advice-add 'evil-undo :after #'flash-emacs-remote--after-undo)
+  (add-hook 'post-command-hook #'flash-emacs-remote--clear-undo-info))
+
+;; Also advise undo-fu if available
+(with-eval-after-load 'undo-fu
+  (advice-add 'undo-fu-only-undo :after #'flash-emacs-remote--after-undo))
 
 ;;; Post-command hook for restoration
 
@@ -202,7 +295,6 @@ Returns (beg end type) list or nil if cancelled."
     (remove-hook 'evil-insert-state-exit-hook
                  #'flash-emacs-remote--on-insert-exit t)
     (when flash-emacs-remote-restore
-      ;; Use a small delay to let Evil complete the state transition
       (run-at-time 0.01 nil #'flash-emacs-remote--restore-state)))
   
   (defun flash-emacs-remote--apply-operator (op range &optional register)
@@ -221,14 +313,14 @@ Returns t if the operator enters insert mode (change), nil otherwise."
              ;; Delete - handles register
              ((memq op '(evil-delete evil-org-delete))
               (evil-delete beg end type register))
-             ;; Change - handles register, enters insert mode
+             ;; Change - delete then enter insert
              ((memq op '(evil-change evil-org-change))
               (setq enters-insert t)
               ;; Set up hook to restore after insert exit
               (flash-emacs-remote--setup-insert-exit-hook)
-              ;; Delete the text and enter insert mode
+              ;; Delete the text
               (evil-delete beg end type register)
-              ;; Schedule insert state entry after motion completes
+              ;; Enter insert state via timer (required for Evil state machine)
               (run-at-time 0 nil #'evil-insert-state))
              ;; Upcase
              ((eq op 'evil-upcase)
