@@ -93,25 +93,19 @@
         (list (selected-window) (point) (window-start) (current-buffer))))
 
 (defun flash-emacs-remote--restore-state ()
-  "Restore saved state without recording cursor movement in undo."
+  "Restore saved state."
   (when-let* ((state flash-emacs-remote--saved-state)
               (win (nth 0 state))
               (pt (nth 1 state))
               (ws (nth 2 state))
               (buf (nth 3 state)))
-    ;; Always restore to the saved window (handles same-buffer-multiple-windows case)
+    ;; Always restore to the saved window
     (when (and (window-live-p win) (buffer-live-p buf))
       (select-window win)
       (set-window-start win ws t)
-      ;; Ensure correct buffer is shown (in case window was reused)
       (unless (eq (window-buffer win) buf)
         (set-window-buffer win buf))
-      ;; Move cursor without recording in undo
-      ;; We temporarily disable undo recording for the cursor move
-      (let ((buffer-undo-list t))
-        (goto-char pt))
-      ;; Add undo boundary so future undos don't affect this position
-      (undo-boundary)))
+      (goto-char pt)))
   (setq flash-emacs-remote--saved-state nil
         flash-emacs-remote--waiting nil))
 
@@ -208,8 +202,8 @@ Returns (beg end type) list or nil if cancelled."
     (remove-hook 'evil-insert-state-exit-hook
                  #'flash-emacs-remote--on-insert-exit t)
     (when flash-emacs-remote-restore
-      ;; Restore immediately without timer to keep it in same undo group
-      (flash-emacs-remote--restore-state)))
+      ;; Use a small delay to let Evil complete the state transition
+      (run-at-time 0.01 nil #'flash-emacs-remote--restore-state)))
   
   (defun flash-emacs-remote--apply-operator (op range &optional register)
     "Apply operator OP on RANGE (beg end type) with REGISTER.
