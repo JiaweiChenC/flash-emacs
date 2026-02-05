@@ -51,6 +51,7 @@
 ;;; Variables for Evil compatibility
 
 (defvar evil-this-operator)
+(defvar evil-this-register)
 (defvar evil-state)
 (defvar evil-inhibit-operator)
 (defvar evil-operator-state-map)
@@ -58,8 +59,23 @@
 (defvar evil-normal-state-map)
 (defvar flash-emacs--remote-operation)
 (declare-function evil-yank "evil-commands")
+(declare-function evil-delete "evil-commands")
+(declare-function evil-change "evil-commands")
+(declare-function evil-upcase "evil-commands")
+(declare-function evil-downcase "evil-commands")
+(declare-function evil-indent "evil-commands")
+(declare-function evil-shift-left "evil-commands")
+(declare-function evil-shift-right "evil-commands")
+(declare-function evil-invert-char "evil-commands")
+(declare-function evil-rot13 "evil-commands")
+(declare-function evil-fill "evil-commands")
+(declare-function evil-fill-and-move "evil-commands")
 (declare-function evil-define-motion "evil-macros")
 (declare-function evil-normal-state "evil-states")
+(declare-function evil-insert-state "evil-states")
+(declare-function evil-insert "evil-commands")
+(declare-function evil-with-state "evil-macros")
+(defvar evil-insert-state-exit-hook)
 
 ;;; Internal state
 
@@ -118,108 +134,205 @@ For change operator, waits until exiting insert mode."
 
 (with-eval-after-load 'evil
   (require 'evil-macros)
+  (require 'evil-commands)
   
-  ;; Map operator functions to their keys (more reliable than where-is-internal)
-  (defvar flash-emacs-remote--operator-keys
-    '((evil-delete . "d")
-      (evil-yank . "y")
-      (evil-change . "c")
-      (evil-delete-char . "x")
-      (evil-indent . "=")
-      (evil-shift-left . "<")
-      (evil-shift-right . ">")
-      ;; Multi-key operators
-      (evil-upcase . "gU")
-      (evil-downcase . "gu")
-      (evil-invert-char . "g~")
-      (evil-invert-case . "g~")
-      (evil-rot13 . "g?")
-      (evil-fill . "gw")
-      (evil-fill-and-move . "gq")
-      (evil-join-whitespace . "gJ")
-      ;; evil-org variants (same keys as standard operators)
-      (evil-org-delete . "d")
-      (evil-org-yank . "y")
-      (evil-org-change . "c")
-      (evil-org-< . "<")
-      (evil-org-> . ">"))
-    "Mapping of operator functions to their key sequences.")
+  (defvar flash-emacs-remote--debug t
+    "When non-nil, enable debug logging.")
   
-  (defun flash-emacs-remote--get-operator-key (op)
-    "Get the key sequence for operator OP."
-    (or (cdr (assq op flash-emacs-remote--operator-keys))
-        ;; Fallback to where-is-internal
-        (let ((key (car (where-is-internal op evil-normal-state-map))))
-          (when key (key-description key)))))
+  (defun flash-emacs-remote--read-text-object-or-motion ()
+    "Read a text object or motion from user input.
+Returns (beg end type) list or nil if cancelled."
+    (let ((keys (vector))
+          (done nil)
+          range)
+      ;; Read keys until we get a valid text object/motion or user cancels
+      (while (not done)
+        (let* ((key (read-event "Motion/text-object: "))
+               (key-vec (vector key)))
+          (setq keys (vconcat keys key-vec))
+          ;; Try to find binding in operator-pending state map first,
+          ;; then normal state map
+          (let ((binding (or (lookup-key evil-operator-state-map keys)
+                             (lookup-key evil-motion-state-map keys)
+                             (lookup-key evil-normal-state-map keys))))
+            (cond
+             ;; ESC or C-g cancels
+             ((or (eq key 27) (eq key 7))
+              (setq done t range nil))
+             ;; Found a complete binding (not a keymap prefix)
+             ((and binding (not (keymapp binding)) (commandp binding))
+              ;; Save point to detect motion
+              (let ((start-pos (point)))
+                ;; Call the text-object/motion in operator state context
+                (condition-case err
+                    (let ((result (evil-with-state operator
+                                    (call-interactively binding))))
+                      (cond
+                       ;; Text objects return (beg end type [properties...])
+                       ((and (listp result)
+                             (>= (length result) 2)
+                             (numberp (car result))
+                             (numberp (cadr result)))
+                        (setq range result))
+                       ;; Motion: use start-pos to current point
+                       ((not (= (point) start-pos))
+                        (setq range (list (min start-pos (point))
+                                          (max start-pos (point))
+                                          'inclusive)))
+                       ;; No range detected
+                       (t (setq range nil))))
+                  (error
+                   (when flash-emacs-remote--debug
+                     (message "flash-remote: error executing %S: %S" binding err))
+                   (setq range nil))))
+              (setq done t))
+             ;; Prefix key - continue reading
+             ((keymapp binding)
+              nil)
+             ;; Number: could be count prefix
+             ((and (characterp key) (>= key ?0) (<= key ?9))
+              nil)
+             ;; No binding found
+             ((not binding)
+              (message "flash-remote: no binding for %s" (key-description keys))
+              (setq done t range nil))))))
+      range))
   
-  (defun flash-emacs-remote--execute-at-target (op op-key target-pos target-win target-buf)
-    "Execute operator OP with OP-KEY at TARGET-POS in TARGET-WIN/TARGET-BUF."
-    (when (buffer-live-p target-buf)
-      ;; Only switch window/buffer if target is in a different buffer
-      (let ((same-buffer-p (eq target-buf (current-buffer))))
-        (unless same-buffer-p
-          (when (window-live-p target-win)
-            (select-window target-win))
-          (unless (eq (current-buffer) target-buf)
-            (set-window-buffer (selected-window) target-buf))))
-      (goto-char target-pos)
-      ;; Ensure we're in normal state first
-      (when (and (boundp 'evil-state) (not (eq evil-state 'normal)))
-        (evil-normal-state))
-      ;; Set up restoration hook
-      (when flash-emacs-remote-restore
-        (flash-emacs-remote--start-waiting))
-      ;; For multi-key operators (like gU), temporarily bind to a single key
-      ;; then use that key via unread-command-events
-      (if (> (length op-key) 1)
-          ;; Multi-key operator: temporarily bind to F13 (unlikely to be used)
-          (let ((temp-key [f13]))
-            (define-key evil-normal-state-map temp-key op)
-            (setq unread-command-events (listify-key-sequence temp-key))
-            ;; Schedule cleanup of the temporary binding
-            (run-at-time 0.5 nil
-                         (lambda ()
-                           (define-key evil-normal-state-map temp-key nil))))
-        ;; Single-key operator: use unread-command-events directly
-        (setq unread-command-events (listify-key-sequence (kbd op-key))))))
+  (defun flash-emacs-remote--setup-insert-exit-hook ()
+    "Set up hook to restore position when exiting insert mode."
+    (when flash-emacs-remote--debug
+      (message "flash-remote: setting up insert exit hook"))
+    (add-hook 'evil-insert-state-exit-hook
+              #'flash-emacs-remote--on-insert-exit nil t))
+  
+  (defun flash-emacs-remote--on-insert-exit ()
+    "Called when exiting insert state after change operation."
+    (remove-hook 'evil-insert-state-exit-hook
+                 #'flash-emacs-remote--on-insert-exit t)
+    (when flash-emacs-remote--debug
+      (message "flash-remote: insert exit, restoring position"))
+    (when flash-emacs-remote-restore
+      ;; Small delay to let the state transition complete
+      (run-at-time 0.01 nil #'flash-emacs-remote--restore-state)))
+  
+  (defun flash-emacs-remote--apply-operator (op range &optional register)
+    "Apply operator OP on RANGE (beg end type) with REGISTER.
+Returns t if the operator enters insert mode (change), nil otherwise."
+    (let* ((beg (car range))
+           (end (cadr range))
+           (type (or (caddr range) 'inclusive))
+           (enters-insert nil))
+      (when flash-emacs-remote--debug
+        (message "flash-remote: applying %S on %d-%d type=%S reg=%S"
+                 op beg end type register))
+      (let ((evil-this-register register))
+        (condition-case err
+            (cond
+             ;; Yank - handles register
+             ((memq op '(evil-yank evil-org-yank))
+              (evil-yank beg end type register))
+             ;; Delete - handles register
+             ((memq op '(evil-delete evil-org-delete))
+              (evil-delete beg end type register))
+             ;; Change - handles register, enters insert mode
+             ((memq op '(evil-change evil-org-change))
+              (setq enters-insert t)
+              (when flash-emacs-remote--debug
+                (message "flash-remote: CHANGE op detected, range %d-%d" beg end))
+              ;; Set up hook to restore after insert exit
+              (flash-emacs-remote--setup-insert-exit-hook)
+              ;; Delete the text first
+              (delete-region beg end)
+              (goto-char beg)
+              (when flash-emacs-remote--debug
+                (message "flash-remote: deleted region, now at %d" (point)))
+              ;; Schedule insert state entry after motion completes
+              ;; This avoids Evil resetting state when motion returns
+              (run-at-time 0 nil
+                           (lambda ()
+                             (when flash-emacs-remote--debug
+                               (message "flash-remote: timer fired, entering insert"))
+                             (evil-insert-state))))
+             ;; Upcase
+             ((eq op 'evil-upcase)
+              (evil-upcase beg end type))
+             ;; Downcase
+             ((eq op 'evil-downcase)
+              (evil-downcase beg end type))
+             ;; Indent
+             ((eq op 'evil-indent)
+              (evil-indent beg end))
+             ;; Shift
+             ((eq op 'evil-shift-left)
+              (evil-shift-left beg end))
+             ((eq op 'evil-shift-right)
+              (evil-shift-right beg end))
+             ;; Invert case
+             ((eq op 'evil-invert-char)
+              (evil-invert-char beg end type))
+             ;; Rot13
+             ((eq op 'evil-rot13)
+              (evil-rot13 beg end type))
+             ;; Fill/format
+             ((eq op 'evil-fill)
+              (evil-fill beg end))
+             ((eq op 'evil-fill-and-move)
+              (evil-fill-and-move beg end))
+             ;; Default: try calling with beg/end/type
+             (t
+              (condition-case nil
+                  (funcall op beg end type)
+                (wrong-number-of-arguments
+                 (funcall op beg end)))))
+          (error
+           (message "flash-remote: error applying %S: %S" op err))))
+      enters-insert))
   
   (evil-define-motion flash-emacs-remote-motion (count)
-    "Jump to remote location and re-enter operator-pending mode.
-Use as: dr<search><label>iw to delete inner word at target."
-    :type inclusive
+    "Jump to remote location, read text object, apply operator.
+Use as: yr<search><label>iw - yank inner word at target.
+
+This bypasses Evil's operator state machine entirely:
+1. Captures the current operator
+2. Jumps to target with flash
+3. Reads text object/motion from user
+4. Calls the operator function directly with the range
+5. Restores original position"
+    :type exclusive
     :jump t
     (interactive "<c>")
     (let ((op evil-this-operator)
-          (start-pos (point))
-          (start-win (selected-window))
-          (start-buf (current-buffer))
+          (register evil-this-register)
           target-pos target-win target-buf)
-      ;; Save state for restoration BEFORE jumping
+      ;; Save state for restoration
       (when flash-emacs-remote-restore
         (flash-emacs-remote--save-state))
-      ;; Abort current operator
+      ;; Abort this operator - we handle everything ourselves
       (setq evil-inhibit-operator t)
-      ;; Do the flash jump - this moves cursor to target
-      ;; Set remote operation flag to skip the +1 position adjustment
+      ;; Flash jump to target
       (let ((flash-emacs--remote-operation t))
         (flash-emacs-jump))
-      ;; Capture target position
+      ;; Capture target
       (setq target-pos (point)
             target-win (selected-window)
             target-buf (current-buffer))
-      ;; Move back to start so Evil sees zero-width range (no-op)
-      (when (window-live-p start-win)
-        (select-window start-win))
-      (when (buffer-live-p start-buf)
-        (set-buffer start-buf)
-        (goto-char start-pos))
-      ;; Schedule the actual remote operation
-      (when op
-        (let ((op-key (flash-emacs-remote--get-operator-key op)))
-          (when op-key
-            (run-at-time 0 nil
-                         #'flash-emacs-remote--execute-at-target
-                         op op-key target-pos target-win target-buf))))))
+      (when flash-emacs-remote--debug
+        (message "flash-remote: at target pos=%d win=%S buf=%S op=%S"
+                 target-pos target-win target-buf op))
+      ;; Now read text object/motion and apply operator
+      (let ((enters-insert nil))
+        (when op
+          (let ((range (flash-emacs-remote--read-text-object-or-motion)))
+            (when range
+              (when flash-emacs-remote--debug
+                (message "flash-remote: got range=%S" range))
+              (setq enters-insert
+                    (flash-emacs-remote--apply-operator op range register)))))
+        ;; Restore position unless operator entered insert mode
+        ;; (change operator sets up its own hook for restoration)
+        (when (and flash-emacs-remote-restore
+                   (not enters-insert))
+          (flash-emacs-remote--restore-state)))))
 
   ;; Bind in operator-pending mode
   (define-key evil-operator-state-map
