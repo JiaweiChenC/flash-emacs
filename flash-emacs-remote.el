@@ -336,8 +336,16 @@ Returns t if the operator enters insert mode (change), nil otherwise."
               (setq flash-emacs-remote--change-group-handle evil-undo-list-pointer)
               ;; Delete the text
               (evil-delete beg end type register)
-              ;; Enter insert state via timer (required for Evil state machine)
-              (run-at-time 0 nil #'evil-insert-state))
+              ;; Capture target window and position AFTER delete
+              ;; (timer fires after motion returns, Evil may have switched windows)
+              (let ((insert-win (selected-window))
+                    (insert-pos (point)))
+                (run-at-time 0 nil
+                             (lambda ()
+                               (when (window-live-p insert-win)
+                                 (select-window insert-win)
+                                 (goto-char insert-pos)
+                                 (evil-insert-state))))))
              ;; Upcase
              ((eq op 'evil-upcase)
               (evil-upcase beg end type))
