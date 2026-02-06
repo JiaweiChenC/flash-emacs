@@ -88,6 +88,11 @@
 (defvar flash-emacs-remote--change-group-handle nil
   "Handle for undo change group during change operations.")
 
+(defvar evil-undo-list-pointer)
+(declare-function evil-start-undo-step "evil-common")
+(declare-function evil-end-undo-step "evil-common")
+(declare-function evil-refresh-undo-step "evil-common")
+
 (defvar flash-emacs-remote--undo-restore-info nil
   "Info for restoring position after undo: (original-window original-marker).
 Uses a marker so position adjusts when undo changes buffer content.
@@ -294,6 +299,13 @@ Returns (beg end type) list or nil if cancelled."
     "Called when exiting insert state after change operation."
     (remove-hook 'evil-insert-state-exit-hook
                  #'flash-emacs-remote--on-insert-exit t)
+    ;; Use Evil's undo step mechanism to combine delete+insert
+    (when flash-emacs-remote--change-group-handle
+      ;; Restore the pointer and refresh to remove intermediate boundaries
+      (setq evil-undo-list-pointer flash-emacs-remote--change-group-handle)
+      (evil-refresh-undo-step)
+      (evil-end-undo-step)
+      (setq flash-emacs-remote--change-group-handle nil))
     (when flash-emacs-remote-restore
       (run-at-time 0.01 nil #'flash-emacs-remote--restore-state)))
   
@@ -313,11 +325,15 @@ Returns t if the operator enters insert mode (change), nil otherwise."
              ;; Delete - handles register
              ((memq op '(evil-delete evil-org-delete))
               (evil-delete beg end type register))
-             ;; Change - delete then enter insert
+             ;; Change - delete then enter insert, use Evil's undo step for grouping
              ((memq op '(evil-change evil-org-change))
               (setq enters-insert t)
               ;; Set up hook to restore after insert exit
               (flash-emacs-remote--setup-insert-exit-hook)
+              ;; Start Evil's undo step - this will group all changes
+              (evil-start-undo-step)
+              ;; Store the pointer so we can refresh in on-insert-exit
+              (setq flash-emacs-remote--change-group-handle evil-undo-list-pointer)
               ;; Delete the text
               (evil-delete beg end type register)
               ;; Enter insert state via timer (required for Evil state machine)
