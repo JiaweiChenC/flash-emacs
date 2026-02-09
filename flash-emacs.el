@@ -183,6 +183,13 @@ static char * flash[] = {
   "Get list of windows to search in based on configuration."
   (if flash-emacs-multi-window (window-list) (list (selected-window))))
 
+(defun flash-emacs--in-image-overlay-p (pos)
+  "Check if POS is inside an org image overlay (including sliced images).
+This prevents flash labels from disrupting image display."
+  (cl-some (lambda (ov)
+             (overlay-get ov 'org-image-overlay))
+           (overlays-at pos)))
+
 (defun flash-emacs--should-ignore-case (pattern)
   "Determine if search should ignore case based on PATTERN and settings."
   (pcase flash-emacs-case-sensitive
@@ -236,7 +243,8 @@ static char * flash[] = {
   (cons (window-start window) (window-end window)))
 
 (defun flash-emacs--search-in-window (pattern window)
-  "Search for PATTERN in WINDOW and return list of matches."
+  "Search for PATTERN in WINDOW and return list of matches.
+Skips matches inside org image overlays (e.g., org-sliced-images)."
   (when-let* ((buffer (window-buffer window))
               ((not (flash-emacs--buffer-excluded-p buffer))))
     (let ((case-fold-search (flash-emacs--should-ignore-case pattern))
@@ -246,12 +254,17 @@ static char * flash[] = {
         (save-excursion
           (goto-char (car bounds))
           (while (search-forward pattern (cdr bounds) t)
-            (push (list :pos (match-beginning 0)
-                        :end-pos (match-end 0)
-                        :window window
-                        :buffer buffer
-                        :text (match-string-no-properties 0))
-                  matches))))
+            (let ((start (match-beginning 0))
+                  (end (match-end 0)))
+              ;; Skip matches inside org image overlays
+              (unless (or (flash-emacs--in-image-overlay-p start)
+                          (flash-emacs--in-image-overlay-p end))
+                (push (list :pos start
+                            :end-pos end
+                            :window window
+                            :buffer buffer
+                            :text (match-string-no-properties 0))
+                      matches))))))
       (nreverse matches))))
 
 (defun flash-emacs--search-pattern (pattern)
@@ -395,7 +408,8 @@ static char * flash[] = {
     ov))
 
 (defun flash-emacs--create-label-overlay (match)
-  "Create an overlay for the label of MATCH."
+  "Create an overlay for the label of MATCH.
+Returns nil if position is inside an org image overlay."
   (when-let* ((label (plist-get match :label))
               (buffer (plist-get match :buffer))
               (window (plist-get match :window))
@@ -430,12 +444,16 @@ static char * flash[] = {
                                         'window window))))))))
 
 (defun flash-emacs--create-match-overlay (match)
-  "Create an overlay for highlighting MATCH."
+  "Create an overlay for highlighting MATCH.
+Returns nil if position is inside an org image overlay."
   (with-current-buffer (plist-get match :buffer)
-    (flash-emacs--make-overlay (plist-get match :pos) (plist-get match :end-pos)
-                               'face 'flash-emacs-match
-                               'flash-emacs 'match
-                               'priority 150)))
+    (let ((start (plist-get match :pos)))
+      ;; Skip if inside an org image overlay
+      (unless (flash-emacs--in-image-overlay-p start)
+        (flash-emacs--make-overlay start (plist-get match :end-pos)
+                                   'face 'flash-emacs-match
+                                   'flash-emacs 'match
+                                   'priority 150)))))
 
 (defun flash-emacs--dim-windows ()
   "Apply dimming overlays to visible areas of searched windows."
@@ -452,7 +470,8 @@ static char * flash[] = {
   "Display overlays for ALL-MATCHES and LABELED-MATCHES."
   (flash-emacs--clear-overlays)
   (dolist (match all-matches)
-    (push (flash-emacs--create-match-overlay match) flash-emacs--overlays))
+    (when-let* ((ov (flash-emacs--create-match-overlay match)))
+      (push ov flash-emacs--overlays)))
   (dolist (match labeled-matches)
     (when-let* ((ov (flash-emacs--create-label-overlay match)))
       (push ov flash-emacs--overlays))))
