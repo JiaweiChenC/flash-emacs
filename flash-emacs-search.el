@@ -141,11 +141,20 @@ Returns nil if position is inside an org image overlay."
 ;;; Window helpers
 
 (defun flash-emacs-search--get-windows ()
-  "Get windows for search, excluding minibuffer."
-  (cl-remove-if (lambda (win)
-                  (or (minibufferp (window-buffer win))
-                      (not (window-live-p win))))
-                (flash-emacs--get-windows)))
+  "Get windows for search, excluding minibuffer.
+Always includes the main buffer window, regardless of `flash-emacs-multi-window'."
+  (let ((wins (cl-remove-if (lambda (win)
+                              (or (minibufferp (window-buffer win))
+                                  (not (window-live-p win))))
+                            (if flash-emacs-multi-window
+                                (window-list)
+                              ;; When multi-window is nil, selected-window may be
+                              ;; the minibuffer during search. Use minibuffer-selected-window
+                              ;; as fallback.
+                              (let ((main-win (or (minibuffer-selected-window)
+                                                  (selected-window))))
+                                (list main-win))))))
+    wins))
 
 ;;; Match finding
 

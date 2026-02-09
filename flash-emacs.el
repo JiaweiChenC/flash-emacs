@@ -354,6 +354,27 @@ Skips matches inside org image overlays (e.g., org-sliced-images)."
                ((eq b-buf current-buffer) nil)
                (t (< a-dist b-dist))))))))
 
+(defun flash-emacs--dedupe-matches (matches current-window)
+  "Remove duplicate matches for the same buffer position.
+When two windows show the same buffer, a position appears twice.
+Prefer the match in CURRENT-WINDOW when duplicates exist."
+  (let ((table (make-hash-table :test 'equal))
+        (order '()))
+    (dolist (match matches)
+      (let* ((buf (plist-get match :buffer))
+             (pos (plist-get match :pos))
+             (key (cons buf pos))
+             (existing (gethash key table)))
+        (cond
+         ((null existing)
+          (puthash key match table)
+          (push key order))
+         ;; Prefer current window's match
+         ((and (eq (plist-get match :window) current-window)
+               (not (eq (plist-get existing :window) current-window)))
+          (puthash key match table)))))
+    (nreverse (mapcar (lambda (k) (gethash k table)) order))))
+
 (defun flash-emacs--make-position-key (match)
   "Create a unique position key for MATCH."
   (cons (plist-get match :window) (plist-get match :pos)))
@@ -688,6 +709,8 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
                     (`(add-char . ,new-pattern) (setq pattern new-pattern)))
                   ;; Update search
                   (setq matches (flash-emacs--search-pattern pattern))
+                  ;; Dedupe matches when same buffer visible in multiple windows
+                  (setq matches (flash-emacs--dedupe-matches matches (selected-window)))
                   ;; Exit if no matches
                   (when (and (> (length pattern) 0) (null matches))
                     (throw 'flash-exit nil))
