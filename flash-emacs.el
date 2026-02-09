@@ -313,7 +313,7 @@ This helps maintain label stability as you type more characters."
 
 (defun flash-emacs--make-position-key (match)
   "Create a unique position key for MATCH."
-  (format "%s:%d" (buffer-name (plist-get match :buffer)) (plist-get match :pos)))
+  (cons (plist-get match :window) (plist-get match :pos)))
 
 (defun flash-emacs--can-reuse-label-p (label)
   "Return non-nil if LABEL can be reused based on configuration."
@@ -339,17 +339,14 @@ This helps maintain label stability as you type more characters."
   (let* ((filtered-labels (flash-emacs--filter-labels-for-pattern labels pattern windows))
          (sorted-matches (flash-emacs--sort-matches matches current-point current-window))
          (available (mapcar #'char-to-string (string-to-list filtered-labels)))
-         (used '())
          (labeled '()))
     ;; First pass: reuse existing labels
     (dolist (match sorted-matches)
       (when-let* ((pos-key (flash-emacs--make-position-key match))
                   (existing (gethash pos-key flash-emacs--label-positions))
                   ((member existing available))
-                  ((not (member existing used)))
                   ((flash-emacs--can-reuse-label-p existing)))
         (plist-put match :label existing)
-        (push existing used)
         (setq available (delete existing available))
         (push match labeled)))
     ;; Second pass: assign new labels
@@ -357,7 +354,6 @@ This helps maintain label stability as you type more characters."
       (when (and (not (plist-get match :label)) available)
         (let ((new-label (pop available)))
           (plist-put match :label new-label)
-          (push new-label used)
           (when (flash-emacs--can-reuse-label-p new-label)
             (puthash (flash-emacs--make-position-key match) new-label flash-emacs--label-positions))
           (push match labeled))))
@@ -376,6 +372,7 @@ This helps maintain label stability as you type more characters."
   "Create an overlay for the label of MATCH."
   (when-let* ((label (plist-get match :label))
               (buffer (plist-get match :buffer))
+              (window (plist-get match :window))
               (match-start (plist-get match :pos))
               (match-end (plist-get match :end-pos))
               (styled-label (propertize label 'face 'flash-emacs-label)))
@@ -388,6 +385,7 @@ This helps maintain label stability as you type more characters."
                          styled-label)
             (overlay-put ov 'flash-emacs 'label)
             (overlay-put ov 'priority 200)
+            (overlay-put ov 'window window)
             ov))
         (_  ; replace style
          (let* ((target-pos (if (eq flash-emacs-label-position 'after) match-end match-start))
@@ -397,11 +395,13 @@ This helps maintain label stability as you type more characters."
                (flash-emacs--make-overlay target-pos target-pos
                                           'before-string styled-label
                                           'flash-emacs 'label
-                                          'priority 200)
+                                          'priority 200
+                                          'window window)
              (flash-emacs--make-overlay target-pos (1+ target-pos)
                                         'display styled-label
                                         'flash-emacs 'label
-                                        'priority 200))))))))
+                                        'priority 200
+                                        'window window))))))))
 
 (defun flash-emacs--create-match-overlay (match)
   "Create an overlay for highlighting MATCH."
