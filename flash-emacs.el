@@ -688,7 +688,6 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
                     (`(add-char . ,new-pattern) (setq pattern new-pattern)))
                   ;; Update search
                   (setq matches (flash-emacs--search-pattern pattern))
-                  (setq matches (flash-emacs--dedupe-matches matches (selected-window)))
                   ;; Exit if no matches
                   (when (and (> (length pattern) 0) (null matches))
                     (throw 'flash-exit nil))
