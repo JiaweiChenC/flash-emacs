@@ -30,7 +30,7 @@
   :type 'string
   :group 'flash-emacs)
 
-(defcustom flash-emacs--window t
+(defcustom flash-emacs-multi-window t
   "Whether to search in all visible windows."
   :type 'boolean
   :group 'flash-emacs)
