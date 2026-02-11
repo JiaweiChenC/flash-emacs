@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2024 Free Software Foundation, Inc.
 
-;; Author: Flash-Emacs Contributors
+;; Author: Jiawei Chen
 ;; Version: 1.0.0
 ;; Package-Requires: ((emacs "26.1") (flash-emacs "1.0.0") (evil "1.0.0"))
 ;; Keywords: convenience
