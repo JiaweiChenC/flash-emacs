@@ -31,6 +31,16 @@ flash-emacs-ts-jump
 #+attr_org: :width 400
 [[./examples/flash-emacs-ts.gif]]
 
+** remote functionality 
+
+#+attr_org: :width 400
+[[./examples/flash-emacs-remote.gif]]
+
+** search integration
+
+#+attr_org: :width 400
+[[./examples/flash-emacs-search.gif]]
+
 * Options
 
 - =flash-emacs-labels=: characters used for labels, default to all lower and upper cases.
