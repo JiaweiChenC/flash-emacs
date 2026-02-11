@@ -94,8 +94,8 @@ Below is an example if "better-jump" package is used:
 
 + [X] flash-emacs-jump
 + [X] flash-emacs treesitter integration
-+ [ ] flash-emacs search integration 
-+ [ ] flash-emacs remote
++ [X] flash-emacs search integration 
++ [X] flash-emacs remote
 
 * Reference 
 + [[https://github.com/folke/flash.nvim][flash.nvim]]
