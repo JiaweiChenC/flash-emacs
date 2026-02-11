@@ -354,27 +354,6 @@ Skips matches inside org image overlays (e.g., org-sliced-images)."
                ((eq b-buf current-buffer) nil)
                (t (< a-dist b-dist))))))))
 
-(defun flash-emacs--dedupe-matches (matches current-window)
-  "Remove duplicate matches for the same buffer position.
-When two windows show the same buffer, a position appears twice.
-Prefer the match in CURRENT-WINDOW when duplicates exist."
-  (let ((table (make-hash-table :test 'equal))
-        (order '()))
-    (dolist (match matches)
-      (let* ((buf (plist-get match :buffer))
-             (pos (plist-get match :pos))
-             (key (cons buf pos))
-             (existing (gethash key table)))
-        (cond
-         ((null existing)
-          (puthash key match table)
-          (push key order))
-         ;; Prefer current window's match
-         ((and (eq (plist-get match :window) current-window)
-               (not (eq (plist-get existing :window) current-window)))
-          (puthash key match table)))))
-    (nreverse (mapcar (lambda (k) (gethash k table)) order))))
-
 (defun flash-emacs--make-position-key (match)
   "Create a unique position key for MATCH."
   (cons (plist-get match :window) (plist-get match :pos)))
@@ -442,31 +421,32 @@ Returns nil if position is inside an org image overlay."
               (match-end (plist-get match :end-pos))
               (styled-label (propertize label 'face 'flash-emacs-label)))
     (with-current-buffer buffer
-      (pcase flash-emacs-label-style
-        ('inline
-          (let ((ov (make-overlay (if (eq flash-emacs-label-position 'after) match-end match-start)
-                                  (if (eq flash-emacs-label-position 'after) match-end match-start))))
-            (overlay-put ov (if (eq flash-emacs-label-position 'after) 'after-string 'before-string)
-                         styled-label)
-            (overlay-put ov 'flash-emacs 'label)
-            (overlay-put ov 'priority 200)
-            (overlay-put ov 'window window)
-            ov))
-        (_  ; replace style
-         (let* ((target-pos (if (eq flash-emacs-label-position 'after) match-end match-start))
-                (char-at-target (char-after target-pos))
-                (at-newline-or-eob (or (null char-at-target) (= char-at-target ?\n))))
-           (if at-newline-or-eob
-               (flash-emacs--make-overlay target-pos target-pos
-                                          'before-string styled-label
-                                          'flash-emacs 'label
-                                          'priority 200
-                                          'window window)
-             (flash-emacs--make-overlay target-pos (1+ target-pos)
-                                        'display styled-label
-                                        'flash-emacs 'label
-                                        'priority 200
-                                        'window window))))))))
+      (let ((target-pos (if (eq flash-emacs-label-position 'after) match-end match-start)))
+        ;; Skip if inside an org image overlay
+        (unless (flash-emacs--in-image-overlay-p target-pos)
+          (pcase flash-emacs-label-style
+            ('inline
+             (let ((ov (make-overlay target-pos target-pos)))
+               (overlay-put ov (if (eq flash-emacs-label-position 'after) 'after-string 'before-string)
+                            styled-label)
+               (overlay-put ov 'flash-emacs 'label)
+               (overlay-put ov 'priority 200)
+               (overlay-put ov 'window window)
+               ov))
+            (_  ; replace style
+             (let* ((char-at-target (char-after target-pos))
+                    (at-newline-or-eob (or (null char-at-target) (= char-at-target ?\n))))
+               (if at-newline-or-eob
+                   (flash-emacs--make-overlay target-pos target-pos
+                                              'before-string styled-label
+                                              'flash-emacs 'label
+                                              'priority 200
+                                              'window window)
+                 (flash-emacs--make-overlay target-pos (1+ target-pos)
+                                            'display styled-label
+                                            'flash-emacs 'label
+                                            'priority 200
+                                            'window window))))))))))
 
 (defun flash-emacs--create-match-overlay (match)
   "Create an overlay for highlighting MATCH.
@@ -709,8 +689,6 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
                     (`(add-char . ,new-pattern) (setq pattern new-pattern)))
                   ;; Update search
                   (setq matches (flash-emacs--search-pattern pattern))
-                  ;; Dedupe matches when same buffer visible in multiple windows
-                  (setq matches (flash-emacs--dedupe-matches matches (selected-window)))
                   ;; Exit if no matches
                   (when (and (> (length pattern) 0) (null matches))
                     (throw 'flash-exit nil))
