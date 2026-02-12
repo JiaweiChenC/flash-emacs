@@ -236,7 +236,9 @@ Results are cached per pattern."
               (while (re-search-forward search-regexp nil t)
                 (let ((conflict-char (match-string-no-properties 1)))
                   (unless (member conflict-char conflicts)
-                    (push conflict-char conflicts)))))))
+                    (push conflict-char conflicts)))
+                ;; Consider overlapping matches by going back one char
+                (goto-char (1+ (match-beginning 0)))))))
         ;; Cache and return
         (setq flash-emacs-search--conflict-cache (cons pattern conflicts))
         conflicts))))
