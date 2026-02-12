@@ -27,7 +27,9 @@
 ;;; Code:
 
 (require 'treesit)
-(require 'flash-emacs)
+;; Require flash-emacs unless we're in the middle of loading it
+(unless (featurep 'flash-emacs)
+  (require 'flash-emacs))
 
 ;;; Customization
 

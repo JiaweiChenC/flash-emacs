@@ -24,7 +24,9 @@
 
 ;;; Code:
 
-(require 'flash-emacs)
+;; Require flash-emacs unless we're in the middle of loading it
+(unless (featurep 'flash-emacs)
+  (require 'flash-emacs))
 
 (eval-when-compile
   (require 'evil nil t))

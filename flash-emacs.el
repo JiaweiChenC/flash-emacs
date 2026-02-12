@@ -662,9 +662,12 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
 
 (provide 'flash-emacs)
 
-;;; Load submodules (non-fatal if not found)
-(require 'flash-emacs-search nil t)
-(require 'flash-emacs-remote nil t)
-(require 'flash-emacs-ts nil t)
+;;; Load submodules after flash-emacs is fully provided
+;; This happens after byte-compilation, so no circular dependency
+(eval-and-compile
+  (with-eval-after-load 'flash-emacs
+    (require 'flash-emacs-search nil t)
+    (require 'flash-emacs-remote nil t)
+    (require 'flash-emacs-ts nil t)))
 
 ;;; flash-emacs.el ends here

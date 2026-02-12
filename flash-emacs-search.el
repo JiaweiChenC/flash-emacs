@@ -30,10 +30,18 @@
 
 ;;; Code:
 
-(require 'flash-emacs)
+;; Require flash-emacs unless we're in the middle of loading it
+(unless (featurep 'flash-emacs)
+  (require 'flash-emacs))
 
 (eval-when-compile
   (require 'evil nil t))
+
+;; Declare functions from flash-emacs to satisfy byte-compiler
+(declare-function flash-emacs--should-ignore-case "flash-emacs")
+(declare-function flash-emacs--sort-matches "flash-emacs")
+(declare-function flash-emacs--jump-to-match "flash-emacs")
+(defvar flash-emacs-labels)
 
 ;;; Customization
 
