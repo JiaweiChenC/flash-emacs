@@ -443,31 +443,23 @@ Reads the current pattern from the minibuffer to stay in sync after jumps."
     (setq flash-emacs-search--update-timer
           (run-at-time 0 nil #'flash-emacs-search--update-labels))))
 
-(defvar flash-emacs-search--refresh-timer nil
-  "Timer for debounced label refresh.")
-
 (defun flash-emacs-search--post-command ()
-  "Refresh labels after each command (debounced).
-Like flash.nvim, labels are re-sorted by distance from current cursor."
-  (when flash-emacs-search--active
-    ;; Debounce to avoid excessive refreshes during rapid commands
-    (when flash-emacs-search--refresh-timer
-      (cancel-timer flash-emacs-search--refresh-timer))
-    (setq flash-emacs-search--refresh-timer
-          (run-at-time 0.01 nil #'flash-emacs-search--refresh-labels))))
+  "Refresh labels after each command.
+Runs synchronously in post-command-hook, ensuring it happens after
+Evil's lazy highlighting updates (which also runs in post-command-hook)."
+  (when (and flash-emacs-search--active
+             (not flash-emacs-search--updating))
+    (flash-emacs-search--refresh-labels)))
 
-(defvar flash-emacs-search--scroll-timer nil
-  "Timer for debounced scroll updates.")
-
-(defun flash-emacs-search--window-scroll (win _start)
-  "Refresh visible labels when window scrolls."
+(defun flash-emacs-search--window-scroll (_win _start)
+  "Refresh visible labels when window scrolls.
+Disabled during this-command execution since post-command-hook handles
+command-triggered scrolls. Only handles manual scrolling."
   (when (and flash-emacs-search--active
              (active-minibuffer-window)
-             (not (minibufferp (window-buffer win))))
-    (when flash-emacs-search--scroll-timer
-      (cancel-timer flash-emacs-search--scroll-timer))
-    (setq flash-emacs-search--scroll-timer
-          (run-at-time 0 nil #'flash-emacs-search--refresh-labels))))
+             (not this-command)  ; Only for manual scrolling, not command-triggered
+             (not flash-emacs-search--updating))
+    (flash-emacs-search--refresh-labels)))
 
 (defun flash-emacs-search--setup ()
   "Set up flash search for Evil ex-search session."
@@ -485,14 +477,8 @@ Like flash.nvim, labels are re-sorted by distance from current cursor."
   (flash-emacs-search--clear-all)
   (when flash-emacs-search--update-timer
     (cancel-timer flash-emacs-search--update-timer))
-  (when flash-emacs-search--refresh-timer
-    (cancel-timer flash-emacs-search--refresh-timer))
-  (when flash-emacs-search--scroll-timer
-    (cancel-timer flash-emacs-search--scroll-timer))
   (setq flash-emacs-search--active nil
-        flash-emacs-search--update-timer nil
-        flash-emacs-search--scroll-timer nil
-        flash-emacs-search--refresh-timer nil)
+        flash-emacs-search--update-timer nil)
   (remove-hook 'after-change-functions #'flash-emacs-search--after-change t)
   (remove-hook 'pre-command-hook #'flash-emacs-search--pre-command t)
   (remove-hook 'post-command-hook #'flash-emacs-search--post-command t)
