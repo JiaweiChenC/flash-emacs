@@ -104,6 +104,14 @@
 (defvar flash-emacs-search--available-labels nil
   "List of labels still available to assign.")
 
+(defvar flash-emacs-search--user-has-typed nil
+  "Non-nil after user has typed/edited the search pattern.
+Prevents labels from appearing on pre-filled history content.")
+
+(defvar flash-emacs-search--initial-length 0
+  "Length of minibuffer content when search started.
+Used to detect user typing vs pre-filled history.")
+
 ;;; Overlay management
 
 (defun flash-emacs-search--clear-overlays ()
@@ -120,7 +128,9 @@
         flash-emacs-search--available-labels nil
         flash-emacs-search--conflict-cache nil
         flash-emacs-search--updating nil
-        flash-emacs-search--last-update-time nil))
+        flash-emacs-search--last-update-time nil
+        flash-emacs-search--user-has-typed nil
+        flash-emacs-search--initial-length 0))
 
 (defun flash-emacs-search--in-image-overlay-p (pos)
   "Check if POS is inside an org image overlay (including sliced images).
@@ -323,6 +333,7 @@ Key behavior matching flash.nvim:
           (flash-emacs-search--clear-overlays)
           (setq flash-emacs-search--all-matches nil)
           (when (and flash-emacs-search--active
+                     flash-emacs-search--user-has-typed
                      pattern
                      (>= (length pattern) flash-emacs-search-min-length))
             ;; Initialize labels only when pattern changes (like flash.nvim's M.new)
@@ -456,10 +467,19 @@ Reads the current pattern from the minibuffer to stay in sync after jumps."
 (defun flash-emacs-search--post-command ()
   "Refresh labels after each command.
 Runs synchronously in post-command-hook, ensuring it happens after
-Evil's lazy highlighting updates (which also runs in post-command-hook)."
-  (when (and flash-emacs-search--active
-             (not flash-emacs-search--updating))
-    (flash-emacs-search--refresh-labels)))
+Evil's lazy highlighting updates (which also runs in post-command-hook).
+Also detects when user has actually typed by comparing content length."
+  (when flash-emacs-search--active
+    ;; Detect user typing: if content length changed from initial, user is typing
+    (when (and (not flash-emacs-search--user-has-typed)
+               (active-minibuffer-window))
+      (let ((current-len (length (with-current-buffer
+                                     (window-buffer (active-minibuffer-window))
+                                   (minibuffer-contents-no-properties)))))
+        (when (/= current-len flash-emacs-search--initial-length)
+          (setq flash-emacs-search--user-has-typed t))))
+    (when (not flash-emacs-search--updating)
+      (flash-emacs-search--refresh-labels))))
 
 (defun flash-emacs-search--window-scroll (_win _start)
   "Refresh visible labels when window scrolls.
@@ -476,7 +496,11 @@ command-triggered scrolls. Only handles manual scrolling."
   (when (and (boundp 'evil-ex-search-direction)
              flash-emacs-search-enabled)
     (setq flash-emacs-search--active t
-          flash-emacs-search--original-buffer (current-buffer))
+          flash-emacs-search--original-buffer (current-buffer)
+          flash-emacs-search--user-has-typed nil
+          ;; Capture initial length - Evil may have pre-filled history
+          flash-emacs-search--initial-length
+          (length (minibuffer-contents-no-properties)))
     (add-hook 'after-change-functions #'flash-emacs-search--after-change nil t)
     (add-hook 'pre-command-hook #'flash-emacs-search--pre-command nil t)
     (add-hook 'post-command-hook #'flash-emacs-search--post-command nil t)
