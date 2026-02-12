@@ -305,6 +305,7 @@ Skips matches inside org image overlays (e.g., org-sliced-images)."
                                         (string= following-char label)))
                                     labels)))
                 (push matched conflicts)))
+            ;; consider also overlapping matches
             (goto-char (1+ (match-beginning 0))))))
       (delete-dups conflicts))))
 
