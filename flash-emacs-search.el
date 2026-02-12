@@ -258,34 +258,42 @@ Results are cached per pattern."
           flash-emacs-search--available-labels
           (mapcar #'char-to-string (string-to-list filtered-labels)))))
 
-(defun flash-emacs-search--assign-labels (matches pattern)
-  "Assign labels to MATCHES sorted by distance from cursor.
+(defun flash-emacs-search--assign-labels (matches _pattern)
+  "Assign labels to MATCHES with minimum updating.
 
-Like flash.nvim: closest matches to cursor get labels first.
-The `used-labels` table provides stability when PATTERN changes (typing more
-characters), but on cursor movement, labels are redistributed to the closest
-matches."
+Only the N closest matches to the cursor get labels (N = number of
+available labels).  When the cursor moves:
+- Matches still in the top N keep their labels (stability)
+- A match that fell out of the top N loses its label
+- A match that entered the top N gets the freed label
+This results in minimum updating: typically only 1 label moves."
   (let* ((current-window (or (minibuffer-selected-window) (selected-window)))
          (current-point (with-selected-window current-window (point)))
-         (sorted-matches (flash-emacs--sort-matches matches current-point current-window)))
-    ;; Assign labels to closest matches first
-    (dolist (match sorted-matches)
-      (when flash-emacs-search--available-labels
-        (let* ((pos (plist-get match :pos))
-               ;; Try to reuse existing label if available (for pattern stability)
-               (existing-label (gethash pos flash-emacs-search--used-labels))
-               (label (if (and existing-label
-                               (member existing-label flash-emacs-search--available-labels))
-                          existing-label
-                        (car flash-emacs-search--available-labels))))
-          (when label
+         (sorted-matches (flash-emacs--sort-matches matches current-point current-window))
+         (max-labels (length flash-emacs-search--available-labels))
+         ;; Only the N closest matches get labels
+         (top-matches (seq-take sorted-matches max-labels)))
+    ;; Pass 1: Reserve existing labels for top N positions
+    (dolist (match top-matches)
+      (let* ((pos (plist-get match :pos))
+             (existing-label (gethash pos flash-emacs-search--used-labels)))
+        (when (and existing-label
+                   (member existing-label flash-emacs-search--available-labels))
+          (plist-put match :label existing-label)
+          (setq flash-emacs-search--available-labels
+                (delete existing-label flash-emacs-search--available-labels)))))
+    ;; Pass 2: Assign new labels to unlabeled top N matches (closest first)
+    (dolist (match top-matches)
+      (unless (plist-get match :label)
+        (when flash-emacs-search--available-labels
+          (let ((label (car flash-emacs-search--available-labels)))
             (plist-put match :label label)
             (setq flash-emacs-search--available-labels
                   (delete label flash-emacs-search--available-labels))
-            ;; Remember for pattern stability
-            (puthash pos label flash-emacs-search--used-labels)))))
+            (puthash (plist-get match :pos) label
+                     flash-emacs-search--used-labels)))))
     ;; Return only matches that got labels
-    (cl-remove-if-not (lambda (m) (plist-get m :label)) sorted-matches)))
+    (cl-remove-if-not (lambda (m) (plist-get m :label)) top-matches)))
 
 ;;; Display
 
