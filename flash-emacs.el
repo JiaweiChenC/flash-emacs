@@ -261,7 +261,9 @@ This helps maintain label stability as you type more characters."
                                           (string= (downcase following-char) (downcase label))
                                         (string= following-char label)))
                                     labels)))
-                (push matched conflicts))))))
+                (push matched conflicts)))
+            ;; consider also overlapping matches
+            (goto-char (1+ (match-beginning 0))))))
       (delete-dups conflicts))))
 
 (defun flash-emacs--filter-labels-for-pattern (labels search-pattern windows)
