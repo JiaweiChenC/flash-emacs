@@ -35,7 +35,7 @@ flash-emacs-ts-jump
 ** remote functionality 
 
 Execute a operation on the label position, and jump back after that. 
-Useful when you want to quick edit something in another place and continue your current editing after that.
+*Useful when you want to quick edit something in another place and continue your current editing after that.*
 
 #+attr_org: :width 400
 [[./examples/flash-emacs-remote.gif]]
@@ -43,7 +43,7 @@ Useful when you want to quick edit something in another place and continue your 
 ** search integration
 
 This integration the search with flash labels. The labels will dynamically update as the window moves. 
-Useful when the thing you want to jump could be outside of the window.
+*Useful when the thing you want to jump could be outside of the window.*
 
 #+attr_org: :width 400
 [[./examples/flash-emacs-search.gif]]

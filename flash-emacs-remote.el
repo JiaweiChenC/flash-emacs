@@ -8,9 +8,7 @@
 ;; Keywords: convenience
 ;; URL: https://github.com/flash-emacs/flash-emacs
 
-;;; Commentary:
-
-;; Remote operations for flash-emacs, inspired by flash.nvim.
+;;; Jiawei Chen;; Remote operations for flash-emacs, inspired by flash.nvim.
 ;;
 ;; Usage: ys<search><label>iw - yank inner word at remote location
 ;;

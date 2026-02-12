@@ -18,12 +18,15 @@
 ;;
 ;; Usage:
 ;;   (require 'flash-emacs-search)
-;;   (flash-emacs-search-mode 1)
 ;;
-;; Then use Evil's / or ? to search. Labels will appear automatically.
+;; Search integration is enabled automatically on load.
+;; Use Evil's / or ? to search. Labels will appear automatically.
 ;; Press a label key to jump to that match and exit search.
-;;
 ;; Toggle with C-s during search to enable/disable labels.
+;;
+;; To disable: (flash-emacs-search-disable)
+;; To re-enable: (flash-emacs-search-enable)
+;; To control whether labels show by default: (setq flash-emacs-search-enabled nil)
 
 ;;; Code:
 
@@ -501,32 +504,42 @@ Like flash.nvim, labels are re-sorted by distance from current cursor."
     (define-key map (kbd flash-emacs-search-toggle-key) #'flash-emacs-search-toggle)
     map))
 
-;;; Minor mode
+;;; Enable / disable
 
-;;;###autoload
-(define-minor-mode flash-emacs-search-mode
-  "Minor mode to integrate flash-emacs labels with Evil search.
-When enabled, labels appear next to search matches during / and ? search,
-allowing you to jump directly to any match by pressing its label."
-  :global t
-  :lighter " FlashS"
-  (if flash-emacs-search-mode
-      (progn
-        (add-hook 'minibuffer-setup-hook #'flash-emacs-search--maybe-setup)
-        (add-hook 'minibuffer-exit-hook #'flash-emacs-search--cleanup))
+(defvar flash-emacs-search--hooks-installed nil
+  "Non-nil when search integration hooks are installed.")
+
+(defun flash-emacs-search-enable ()
+  "Enable flash-emacs search integration.
+Adds hooks so labels appear during Evil / and ? search."
+  (interactive)
+  (unless flash-emacs-search--hooks-installed
+    (add-hook 'minibuffer-setup-hook #'flash-emacs-search--maybe-setup)
+    (add-hook 'minibuffer-exit-hook #'flash-emacs-search--cleanup)
+    (setq flash-emacs-search--hooks-installed t)))
+
+(defun flash-emacs-search-disable ()
+  "Disable flash-emacs search integration."
+  (interactive)
+  (when flash-emacs-search--hooks-installed
     (remove-hook 'minibuffer-setup-hook #'flash-emacs-search--maybe-setup)
     (remove-hook 'minibuffer-exit-hook #'flash-emacs-search--cleanup)
-    (flash-emacs-search--clear-overlays)))
+    (flash-emacs-search--clear-overlays)
+    (setq flash-emacs-search--hooks-installed nil)))
 
 (defun flash-emacs-search--maybe-setup ()
   "Set up flash search if we're in Evil ex-search."
-  (when (and (boundp 'evil-ex-search-keymap)
+  (when (and flash-emacs-search-enabled
+             (boundp 'evil-ex-search-keymap)
              (eq (current-local-map) evil-ex-search-keymap))
     (flash-emacs-search--setup)
     ;; Add toggle key
     (use-local-map (make-composed-keymap
                     (flash-emacs-search--make-toggle-keymap)
                     (current-local-map)))))
+
+;; Auto-enable on load
+(flash-emacs-search-enable)
 
 (provide 'flash-emacs-search)
 

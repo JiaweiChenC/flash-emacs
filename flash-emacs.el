@@ -528,47 +528,14 @@ Returns nil if position is inside an org image overlay."
     (and (boundp 'evil-visual-selection)
          (or evil-visual-selection 'char))))
 
-;;; Remote operation support
-
-(defcustom flash-emacs-remote-restore t
-  "Whether to restore window position after remote operator.
-When non-nil and operating on a target in a different window,
-returns to original window after the operation completes."
-  :type 'boolean
-  :group 'flash-emacs)
-
-(defvar flash-emacs--remote-saved-state nil
-  "Saved state for remote operations: (window point window-start).")
-
-(defun flash-emacs--save-window-state ()
-  "Save current window state for remote operation."
-  (setq flash-emacs--remote-saved-state
-        (list (selected-window) (point) (window-start))))
-
-(defun flash-emacs--restore-window-state ()
-  "Restore window state after remote operation."
-  (when-let* ((state flash-emacs--remote-saved-state)
-              (window (nth 0 state))
-              (pos (nth 1 state))
-              (win-start (nth 2 state))
-              ((window-live-p window)))
-    (select-window window)
-    (set-window-start window win-start)
-    (goto-char pos))
-  (setq flash-emacs--remote-saved-state nil))
-
 (defun flash-emacs--is-remote-target-p (match)
   "Return non-nil if MATCH is in a different window than current."
   (not (eq (plist-get match :window) (selected-window))))
 
 (defun flash-emacs--jump-to-match (match)
   "Jump to the position of MATCH.
-Handles Evil visual mode, operator-pending mode, and normal Emacs navigation.
-For remote operations (operator in different window), selects the matched
-text for the operator to act on."
+Handles Evil visual mode, operator-pending mode, and normal Emacs navigation."
   (let* ((target-window (plist-get match :window))
-         (match-start (plist-get match :pos))
-         (match-end (plist-get match :end-pos))
          (pos (flash-emacs--calculate-jump-position match))
          (visual-mode (flash-emacs--evil-visual-mode-p))
          (operator-mode (flash-emacs--evil-operator-mode-p))
@@ -577,27 +544,13 @@ text for the operator to act on."
          (is-remote (flash-emacs--is-remote-target-p match))
          (start-point (point)))
     (cond
-     ;; REMOTE OPERATOR mode: operator-pending + different window
-     ;; When flash-emacs--remote-operation is set, the caller (flash-emacs-remote.el)
-     ;; handles everything - just do a simple jump without auto-restoration
-     ((and operator-mode is-remote)
-      (if flash-emacs--remote-operation
-          ;; New approach: just jump, caller handles the rest
-          (progn
-            (select-window target-window)
-            (goto-char pos))
-        ;; Old approach: auto-select and restore (kept for backward compatibility)
-        (when flash-emacs-remote-restore
-          (flash-emacs--save-window-state))
-        (select-window target-window)
-        (goto-char match-start)
-        (when (fboundp 'evil-visual-make-selection)
-          (evil-visual-make-selection match-start (1- match-end) 'char))
-        (when flash-emacs-remote-restore
-          (run-at-time 0.05 nil #'flash-emacs--restore-window-state))))
-     
+     ;; REMOTE OPERATOR mode: flash-emacs-remote.el handles everything
+     ((and operator-mode is-remote flash-emacs--remote-operation)
+      (select-window target-window)
+      (goto-char pos))
+
      ;; LOCAL OPERATOR mode: operator-pending in same window
-     ((and operator-mode (not is-remote))
+     (operator-mode
       (push-mark)
       (select-window target-window)
       ;; Add +1 for forward jumps to make the motion inclusive,
@@ -606,7 +559,7 @@ text for the operator to act on."
                  (> pos start-point) (< pos (point-max)))
         (cl-incf pos))
       (goto-char pos))
-     
+
      ;; VISUAL mode
      (visual-mode
       (select-window target-window)
@@ -620,13 +573,13 @@ text for the operator to act on."
                  original-mark
                  (fboundp 'evil-visual-make-selection))
         (evil-visual-make-selection original-mark (point) 'line)))
-     
+
      ;; NORMAL mode (default)
      (t
       (push-mark)
       (select-window target-window)
       (goto-char pos)))
-    
+
     (run-hook-with-args 'flash-emacs-jump-hook match)))
 
 ;;; Input handling for main loop
@@ -706,5 +659,10 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
           (flash-emacs--clear-dim-overlays))))))
 
 (provide 'flash-emacs)
+
+;;; Load submodules (non-fatal if not found)
+(require 'flash-emacs-search nil t)
+(require 'flash-emacs-remote nil t)
+(require 'flash-emacs-ts nil t)
 
 ;;; flash-emacs.el ends here
