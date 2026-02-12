@@ -304,7 +304,8 @@ Skips matches inside org image overlays (e.g., org-sliced-images)."
                                           (string= (downcase following-char) (downcase label))
                                         (string= following-char label)))
                                     labels)))
-                (push matched conflicts))))))
+                (push matched conflicts)))
+            (goto-char (1+ (match-beginning 0))))))
       (delete-dups conflicts))))
 
 (defun flash-emacs--filter-labels-for-pattern (labels search-pattern windows)
