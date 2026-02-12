@@ -60,7 +60,7 @@
   :type 'boolean
   :group 'flash-emacs)
 
-(defcustom flash-emacs-label-position 'after
+(defcustom flash-emacs-label-position 'before
   "Where to place jump labels relative to the match."
   :type '(choice (const :tag "After the match" after)
           (const :tag "Before the match" before))
@@ -137,6 +137,32 @@ This helps maintain label stability as you type more characters."
   "Face used to dim the background text during flash-emacs-jump."
   :group 'flash-emacs)
 
+;;; Flash icon
+
+(defconst flash-emacs-icon-xpm
+  "/* XPM */
+static char * flash[] = {
+\"8 10 2 1\",
+\". c None\",
+\"# c #FFD700\",
+\"....##..\",
+\"...##...\",
+\"..##....\",
+\".######.\",
+\"....##..\",
+\"...##...\",
+\"..##....\",
+\".##.....\",
+\"##......\",
+\"#.......\"};
+"
+  "XPM data for the flash lightning bolt icon.")
+
+(defun flash-emacs-icon ()
+  "Return the flash icon as a propertized string for display."
+  (propertize " " 'display
+              `(image :type xpm :ascent center :data ,flash-emacs-icon-xpm)))
+
 ;;; Internal variables
 
 (defvar flash-emacs--overlays nil
@@ -151,11 +177,22 @@ This helps maintain label stability as you type more characters."
 (defvar flash-emacs--current-pattern nil
   "Current search pattern for tracking pattern changes.")
 
+(defvar flash-emacs--remote-operation nil
+  "Non-nil when flash jump is being used for a remote operation.
+When set, the +1 position adjustment for forward operator jumps is skipped.")
+
 ;;; Utility functions
 
 (defun flash-emacs--get-windows ()
   "Get list of windows to search in based on configuration."
   (if flash-emacs-multi-window (window-list) (list (selected-window))))
+
+(defun flash-emacs--in-image-overlay-p (pos)
+  "Check if POS is inside an org image overlay (including sliced images).
+This prevents flash labels from disrupting image display."
+  (cl-some (lambda (ov)
+             (overlay-get ov 'org-image-overlay))
+           (overlays-at pos)))
 
 (defun flash-emacs--should-ignore-case (pattern)
   "Determine if search should ignore case based on PATTERN and settings."
@@ -210,7 +247,8 @@ This helps maintain label stability as you type more characters."
   (cons (window-start window) (window-end window)))
 
 (defun flash-emacs--search-in-window (pattern window)
-  "Search for PATTERN in WINDOW and return list of matches."
+  "Search for PATTERN in WINDOW and return list of matches.
+Skips matches inside org image overlays (e.g., org-sliced-images)."
   (when-let* ((buffer (window-buffer window))
               ((not (flash-emacs--buffer-excluded-p buffer))))
     (let ((case-fold-search (flash-emacs--should-ignore-case pattern))
@@ -220,12 +258,17 @@ This helps maintain label stability as you type more characters."
         (save-excursion
           (goto-char (car bounds))
           (while (search-forward pattern (cdr bounds) t)
-            (push (list :pos (match-beginning 0)
-                        :end-pos (match-end 0)
-                        :window window
-                        :buffer buffer
-                        :text (match-string-no-properties 0))
-                  matches))))
+            (let ((start (match-beginning 0))
+                  (end (match-end 0)))
+              ;; Skip matches inside org image overlays
+              (unless (or (flash-emacs--in-image-overlay-p start)
+                          (flash-emacs--in-image-overlay-p end))
+                (push (list :pos start
+                            :end-pos end
+                            :window window
+                            :buffer buffer
+                            :text (match-string-no-properties 0))
+                      matches))))))
       (nreverse matches))))
 
 (defun flash-emacs--search-pattern (pattern)
@@ -371,7 +414,8 @@ This helps maintain label stability as you type more characters."
     ov))
 
 (defun flash-emacs--create-label-overlay (match)
-  "Create an overlay for the label of MATCH."
+  "Create an overlay for the label of MATCH.
+Returns nil if position is inside an org image overlay."
   (when-let* ((label (plist-get match :label))
               (buffer (plist-get match :buffer))
               (window (plist-get match :window))
@@ -379,39 +423,44 @@ This helps maintain label stability as you type more characters."
               (match-end (plist-get match :end-pos))
               (styled-label (propertize label 'face 'flash-emacs-label)))
     (with-current-buffer buffer
-      (pcase flash-emacs-label-style
-        ('inline
-          (let ((ov (make-overlay (if (eq flash-emacs-label-position 'after) match-end match-start)
-                                  (if (eq flash-emacs-label-position 'after) match-end match-start))))
-            (overlay-put ov (if (eq flash-emacs-label-position 'after) 'after-string 'before-string)
-                         styled-label)
-            (overlay-put ov 'flash-emacs 'label)
-            (overlay-put ov 'priority 200)
-            (overlay-put ov 'window window)
-            ov))
-        (_  ; replace style
-         (let* ((target-pos (if (eq flash-emacs-label-position 'after) match-end match-start))
-                (char-at-target (char-after target-pos))
-                (at-newline-or-eob (or (null char-at-target) (= char-at-target ?\n))))
-           (if at-newline-or-eob
-               (flash-emacs--make-overlay target-pos target-pos
-                                          'before-string styled-label
-                                          'flash-emacs 'label
-                                          'priority 200
-                                          'window window)
-             (flash-emacs--make-overlay target-pos (1+ target-pos)
-                                        'display styled-label
-                                        'flash-emacs 'label
-                                        'priority 200
-                                        'window window))))))))
+      (let ((target-pos (if (eq flash-emacs-label-position 'after) match-end match-start)))
+        ;; Skip if inside an org image overlay
+        (unless (flash-emacs--in-image-overlay-p target-pos)
+          (pcase flash-emacs-label-style
+            ('inline
+              (let ((ov (make-overlay target-pos target-pos)))
+                (overlay-put ov (if (eq flash-emacs-label-position 'after) 'after-string 'before-string)
+                             styled-label)
+                (overlay-put ov 'flash-emacs 'label)
+                (overlay-put ov 'priority 200)
+                (overlay-put ov 'window window)
+                ov))
+            (_  ; replace style
+             (let* ((char-at-target (char-after target-pos))
+                    (at-newline-or-eob (or (null char-at-target) (= char-at-target ?\n))))
+               (if at-newline-or-eob
+                   (flash-emacs--make-overlay target-pos target-pos
+                                              'before-string styled-label
+                                              'flash-emacs 'label
+                                              'priority 200
+                                              'window window)
+                 (flash-emacs--make-overlay target-pos (1+ target-pos)
+                                            'display styled-label
+                                            'flash-emacs 'label
+                                            'priority 200
+                                            'window window))))))))))
 
 (defun flash-emacs--create-match-overlay (match)
-  "Create an overlay for highlighting MATCH."
+  "Create an overlay for highlighting MATCH.
+Returns nil if position is inside an org image overlay."
   (with-current-buffer (plist-get match :buffer)
-    (flash-emacs--make-overlay (plist-get match :pos) (plist-get match :end-pos)
-                               'face 'flash-emacs-match
-                               'flash-emacs 'match
-                               'priority 150)))
+    (let ((start (plist-get match :pos)))
+      ;; Skip if inside an org image overlay
+      (unless (flash-emacs--in-image-overlay-p start)
+        (flash-emacs--make-overlay start (plist-get match :end-pos)
+                                   'face 'flash-emacs-match
+                                   'flash-emacs 'match
+                                   'priority 150)))))
 
 (defun flash-emacs--dim-windows ()
   "Apply dimming overlays to visible areas of searched windows."
@@ -428,7 +477,8 @@ This helps maintain label stability as you type more characters."
   "Display overlays for ALL-MATCHES and LABELED-MATCHES."
   (flash-emacs--clear-overlays)
   (dolist (match all-matches)
-    (push (flash-emacs--create-match-overlay match) flash-emacs--overlays))
+    (when-let* ((ov (flash-emacs--create-match-overlay match)))
+      (push ov flash-emacs--overlays)))
   (dolist (match labeled-matches)
     (when-let* ((ov (flash-emacs--create-label-overlay match)))
       (push ov flash-emacs--overlays))))
@@ -463,10 +513,16 @@ This helps maintain label stability as you type more characters."
 
 (defvar evil-state)
 (defvar evil-visual-selection)
+(defvar evil-this-type)
+(defvar evil-this-operator)
 
 (defun flash-emacs--evil-visual-mode-p ()
   "Return non-nil if in Evil visual mode."
   (and (boundp 'evil-state) (eq evil-state 'visual)))
+
+(defun flash-emacs--evil-operator-mode-p ()
+  "Return non-nil if in Evil operator-pending mode."
+  (and (boundp 'evil-state) (eq evil-state 'operator)))
 
 (defun flash-emacs--evil-visual-selection-type ()
   "Return the Evil visual selection type (char, line, block) or nil."
@@ -474,27 +530,58 @@ This helps maintain label stability as you type more characters."
     (and (boundp 'evil-visual-selection)
          (or evil-visual-selection 'char))))
 
+(defun flash-emacs--is-remote-target-p (match)
+  "Return non-nil if MATCH is in a different window than current."
+  (not (eq (plist-get match :window) (selected-window))))
+
 (defun flash-emacs--jump-to-match (match)
-  "Jump to the position of MATCH."
+  "Jump to the position of MATCH.
+Handles Evil visual mode, operator-pending mode, and normal Emacs navigation."
   (let* ((target-window (plist-get match :window))
          (pos (flash-emacs--calculate-jump-position match))
          (visual-mode (flash-emacs--evil-visual-mode-p))
+         (operator-mode (flash-emacs--evil-operator-mode-p))
          (visual-type (flash-emacs--evil-visual-selection-type))
-         (original-mark (when visual-mode (mark t))))
-    (unless visual-mode (push-mark))
-    (select-window target-window)
-    ;; Adjust for Evil visual char/block mode extending forward
-    (when (and (memq visual-type '(char block nil))
-               original-mark
-               (> pos original-mark)
-               (< pos (point-max)))
-      (cl-incf pos))
-    (goto-char pos)
-    ;; Recreate visual line selection if needed
-    (when (and (eq visual-type 'line)
-               original-mark
-               (fboundp 'evil-visual-make-selection))
-      (evil-visual-make-selection original-mark (point) 'line))
+         (original-mark (when visual-mode (mark t)))
+         (is-remote (flash-emacs--is-remote-target-p match))
+         (start-point (point)))
+    (cond
+     ;; REMOTE OPERATOR mode: flash-emacs-remote.el handles everything
+     ((and operator-mode is-remote flash-emacs--remote-operation)
+      (select-window target-window)
+      (goto-char pos))
+
+     ;; LOCAL OPERATOR mode: operator-pending in same window
+     (operator-mode
+      (push-mark)
+      (select-window target-window)
+      ;; Add +1 for forward jumps to make the motion inclusive,
+      ;; but skip this for remote operations (they use text objects)
+      (when (and (not flash-emacs--remote-operation)
+                 (> pos start-point) (< pos (point-max)))
+        (cl-incf pos))
+      (goto-char pos))
+
+     ;; VISUAL mode
+     (visual-mode
+      (select-window target-window)
+      (when (and (memq visual-type '(char block nil))
+                 original-mark
+                 (> pos original-mark)
+                 (< pos (point-max)))
+        (cl-incf pos))
+      (goto-char pos)
+      (when (and (eq visual-type 'line)
+                 original-mark
+                 (fboundp 'evil-visual-make-selection))
+        (evil-visual-make-selection original-mark (point) 'line)))
+
+     ;; NORMAL mode (default)
+     (t
+      (push-mark)
+      (select-window target-window)
+      (goto-char pos)))
+
     (run-hook-with-args 'flash-emacs-jump-hook match)))
 
 ;;; Input handling for main loop
@@ -547,7 +634,7 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
             (catch 'flash-exit
               (flash-emacs--dim-windows)
               (while t
-                (let* ((prompt (concat "Flash:" (if (> (length pattern) 0) pattern "")))
+                (let* ((prompt (concat (flash-emacs-icon) ":" (if (> (length pattern) 0) pattern "")))
                        (result (flash-emacs--handle-input
                                 (read-char-exclusive prompt)
                                 pattern labeled-matches original-message)))
@@ -574,5 +661,10 @@ Returns (action . value) where action is exit, backspace, add-char, or nil."
           (flash-emacs--clear-dim-overlays))))))
 
 (provide 'flash-emacs)
+
+;;; Load submodules (non-fatal if not found)
+(require 'flash-emacs-search nil t)
+(require 'flash-emacs-remote nil t)
+(require 'flash-emacs-ts nil t)
 
 ;;; flash-emacs.el ends here

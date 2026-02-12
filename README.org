@@ -13,8 +13,7 @@ Add =flash-emacs.el= to your =load-path= and require it:
 
 * Usage
 
-
-** Example 
+** jump using flash
 
 #+begin_src emacs-lisp
 M-x flash-emacs-jump
@@ -23,6 +22,8 @@ M-x flash-emacs-jump
 #+attr_org: :width 400
 [[./examples/flash-example.gif]]
 
+** treesitter integration
+
 #+begin_src 
 flash-emacs-ts-jump
 #+end_src
@@ -30,6 +31,22 @@ flash-emacs-ts-jump
 *pressing f, you can select the label surrounded text, emacs treesitter required*
 #+attr_org: :width 400
 [[./examples/flash-emacs-ts.gif]]
+
+** remote functionality 
+
+Execute a operation on the label position, and jump back after that. 
+*Useful when you want to quick edit something in another place and continue your current editing after that.*
+
+#+attr_org: :width 400
+[[./examples/flash-emacs-remote.gif]]
+
+** search integration
+
+This integration the search with flash labels. The labels will dynamically update as the window moves. 
+*Useful when the thing you want to jump could be outside of the window.*
+
+#+attr_org: :width 400
+[[./examples/flash-emacs-search.gif]]
 
 * Options
 
@@ -73,6 +90,12 @@ Below is an example if "better-jump" package is used:
 (advice-add 'flash-emacs-jump :before #'flash-emacs--set-jump-before-jump)
 #+end_src
 
+* TODO 
+
++ [X] flash-emacs-jump
++ [X] flash-emacs treesitter integration
++ [X] flash-emacs search integration 
++ [X] flash-emacs remote
 
 * Reference 
 + [[https://github.com/folke/flash.nvim][flash.nvim]]
