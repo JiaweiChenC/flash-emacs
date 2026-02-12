@@ -207,7 +207,7 @@ Skips matches inside org image overlays (e.g., org-sliced-images)."
 
 (defun flash-emacs-search--find-buffer-conflicts (pattern labels)
   "Find labels that conflict with PATTERN continuation.
-Searches the visible region for pattern+label sequences in a single pass.
+Searches the entire buffer for pattern+label sequences in a single pass.
 Results are cached per pattern."
   (when (and pattern (> (length pattern) 0) labels)
     ;; Check cache first
@@ -222,16 +222,13 @@ Results are cached per pattern."
              (conflicts '())
              (win (car (flash-emacs-search--get-windows))))
         (when win
-          (let ((buf (window-buffer win))
-                (win-start (window-start win))
-                (win-end (window-end win)))
-            (with-current-buffer buf
-              (save-excursion
-                (goto-char win-start)
-                (while (re-search-forward search-regexp win-end t)
-                  (let ((conflict-char (match-string-no-properties 1)))
-                    (unless (member conflict-char conflicts)
-                      (push conflict-char conflicts))))))))
+          (with-current-buffer (window-buffer win)
+            (save-excursion
+              (goto-char (point-min))
+              (while (re-search-forward search-regexp nil t)
+                (let ((conflict-char (match-string-no-properties 1)))
+                  (unless (member conflict-char conflicts)
+                    (push conflict-char conflicts)))))))
         ;; Cache and return
         (setq flash-emacs-search--conflict-cache (cons pattern conflicts))
         conflicts))))
@@ -300,14 +297,11 @@ Key behavior matching flash.nvim:
 - On each update, available-labels is reset but used-labels persists
 - Two-pass labeling: first reuse existing labels, then assign new ones
 - This ensures same positions get same labels across scrolls/navigation."
-  ;; Guard against re-entrant calls and timer feedback loops
+  ;; Guard against re-entrant calls (prevents overlay→scroll→show-labels loop)
   (unless flash-emacs-search--updating
     (setq flash-emacs-search--updating t)
     (unwind-protect
         (progn
-          ;; Temporarily remove scroll hook to prevent feedback loop:
-          ;; overlay changes → window scroll → timer → show-labels → overlay changes → ...
-          (remove-hook 'window-scroll-functions #'flash-emacs-search--window-scroll)
           (flash-emacs-search--clear-overlays)
           (setq flash-emacs-search--all-matches nil)
           (when (and flash-emacs-search--active
@@ -338,13 +332,7 @@ Key behavior matching flash.nvim:
                                win)))
                       (when ov
                         (push ov flash-emacs-search--overlays)))))))))
-      ;; Re-add scroll hook after a delay (lets redisplay settle)
-      (setq flash-emacs-search--updating nil)
-      (run-at-time 0.1 nil
-                   (lambda ()
-                     (when flash-emacs-search--active
-                       (add-hook 'window-scroll-functions
-                                 #'flash-emacs-search--window-scroll)))))))
+      (setq flash-emacs-search--updating nil))))
 
 ;;; Jump handling
 
@@ -425,10 +413,16 @@ Key behavior matching flash.nvim:
 
 (defun flash-emacs-search--refresh-labels ()
   "Refresh labels for visible area.
-Labels are stable due to used-labels table (flash.nvim's label reuse mechanism)."
+Labels are stable due to used-labels table (flash.nvim's label reuse mechanism).
+Reads the current pattern from the minibuffer to stay in sync after jumps."
   (when (and flash-emacs-search--active
-             flash-emacs-search--current-pattern)
-    (flash-emacs-search--show-labels flash-emacs-search--current-pattern)))
+             (active-minibuffer-window))
+    (let ((pattern (or (with-current-buffer
+                           (window-buffer (active-minibuffer-window))
+                         (minibuffer-contents-no-properties))
+                       flash-emacs-search--current-pattern)))
+      (when (and pattern (> (length pattern) 0))
+        (flash-emacs-search--show-labels pattern)))))
 
 (defvar flash-emacs-search--update-timer nil
   "Timer for debounced label updates on text change.")

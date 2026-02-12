@@ -426,13 +426,13 @@ Returns nil if position is inside an org image overlay."
         (unless (flash-emacs--in-image-overlay-p target-pos)
           (pcase flash-emacs-label-style
             ('inline
-             (let ((ov (make-overlay target-pos target-pos)))
-               (overlay-put ov (if (eq flash-emacs-label-position 'after) 'after-string 'before-string)
-                            styled-label)
-               (overlay-put ov 'flash-emacs 'label)
-               (overlay-put ov 'priority 200)
-               (overlay-put ov 'window window)
-               ov))
+              (let ((ov (make-overlay target-pos target-pos)))
+                (overlay-put ov (if (eq flash-emacs-label-position 'after) 'after-string 'before-string)
+                             styled-label)
+                (overlay-put ov 'flash-emacs 'label)
+                (overlay-put ov 'priority 200)
+                (overlay-put ov 'window window)
+                ov))
             (_  ; replace style
              (let* ((char-at-target (char-after target-pos))
                     (at-newline-or-eob (or (null char-at-target) (= char-at-target ?\n))))
